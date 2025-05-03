@@ -1,46 +1,39 @@
-//! By convention, main.zig is where your main function lives in the case that
-//! you are building an executable. If you are making a library, the convention
-//! is to delete this file and start with root.zig instead.
+const std = @import("std");
+const lib = @import("flac_decoder_lib");
+
+pub const Signature = extern struct {
+    sig: [4]u8,
+};
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    const file = try std.fs.cwd().openFile("test/a.flac", .{});
+    const file_reader = file.reader();
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    const sig = try file_reader.readStruct(Signature);
+    std.debug.print("{s}\n", sig);
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    while (true) {
+        const block_header = try lib.metadata.block.getBlockFromReader(
+            lib.metadata.block.Header,
+            file_reader.any(),
+        );
+        std.debug.print("Metadata Block Header: {}\n", .{block_header});
 
-    try bw.flush(); // Don't forget to flush!
-}
-
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
-
-test "use other module" {
-    try std.testing.expectEqual(@as(i32, 150), lib.add(100, 50));
-}
-
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
+        switch (block_header.metadata_block_type) {
+            // streaminfo
+            0 => {
+                const stream_info = try lib.metadata.block.getBlockFromReader(
+                    lib.metadata.block.StreamInfo,
+                    file_reader.any(),
+                );
+                std.debug.print("StreamInfo Block: {}\n", .{stream_info});
+            },
+            else => {
+                @panic("Unhandled Block Type!");
+            },
         }
-    };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
+    }
+
+    file.close();
+    // file_reader.readStruct(comptime T: type)
 }
-
-const std = @import("std");
-
-/// This imports the separate module containing `root.zig`. Take a look in `build.zig` for details.
-const lib = @import("flac_decoder_lib");
