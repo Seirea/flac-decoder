@@ -14,6 +14,7 @@ pub fn main() !void {
     const sig = try file_reader.readStruct(Signature);
     std.debug.print("{s}\n", sig);
 
+    // read metadata
     while (true) {
         const block_header = try lib.metadata.block.getBlockFromReader(
             lib.metadata.block.Header,
@@ -31,13 +32,44 @@ pub fn main() !void {
                 std.debug.print("StreamInfo Block: {}\n", .{stream_info});
             },
             .seek_table => {
-                const seekTable = try lib.metadata.block.SeekTable.createFromReader(
+                const seek_table = try lib.metadata.block.SeekTable.createFromReader(
                     file_reader.any(),
                     allocator,
                     block_header.size_of_metadata_block,
                 );
 
-                std.debug.print("[{d}] SeekTable Block: {}\n", .{ seekTable.seek_points.len, seekTable });
+                std.debug.print("[{d}] SeekTable Block: {}\n", .{ seek_table.seek_points.len, seek_table });
+            },
+            .vorbis_comment => {
+                const vorbis_comment = try lib.metadata.vorbis.VorbisComment.createFromReader(
+                    file_reader.any(),
+                    allocator,
+                );
+                std.debug.print("Vorbis Comment Vendor String: {s}\n", .{vorbis_comment.vendor_string});
+                for (vorbis_comment.user_comments) |x| {
+                    std.debug.print("COMMENT: {s}\n", .{x});
+                }
+            },
+            .picture => {
+                const picture = try lib.metadata.block.Picture.createFromReader(
+                    file_reader.any(),
+                    allocator,
+                );
+                std.debug.print("Image type: {s} | description: {s}\n", .{
+                    picture.media_type_string,
+                    picture.picture_description,
+                });
+            },
+            .application => {
+                const app = try lib.metadata.block.Application.createFromReader(
+                    file_reader.any(),
+                    allocator,
+                    block_header.size_of_metadata_block,
+                );
+                std.debug.print("{}", .{app});
+            },
+            .padding => {
+                try file_reader.skipBytes(block_header.size_of_metadata_block, .{});
             },
             else => {
                 const buf = try allocator.alloc(u8, block_header.size_of_metadata_block);
@@ -48,10 +80,12 @@ pub fn main() !void {
             },
         }
 
-        if (block_header.is_last_block == 1) {
+        if (block_header.is_last_block) {
             break;
         }
     }
+
+    std.debug.print("Metadata read\n", .{});
 
     file.close();
     // file_reader.readStruct(comptime T: type)
