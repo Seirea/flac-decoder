@@ -5,6 +5,8 @@ pub const Signature = extern struct {
     sig: [4]u8,
 };
 
+const allocator = std.heap.smp_allocator;
+
 pub fn main() !void {
     const file = try std.fs.cwd().openFile("test/a.flac", .{});
     const file_reader = file.reader();
@@ -21,7 +23,7 @@ pub fn main() !void {
 
         switch (block_header.metadata_block_type) {
             // streaminfo
-            0 => {
+            lib.metadata.block.Type.streaminfo => {
                 const stream_info = try lib.metadata.block.getBlockFromReader(
                     lib.metadata.block.StreamInfo,
                     file_reader.any(),
@@ -29,8 +31,16 @@ pub fn main() !void {
                 std.debug.print("StreamInfo Block: {}\n", .{stream_info});
             },
             else => {
-                @panic("Unhandled Block Type!");
+                const buf = try allocator.alloc(u8, block_header.size_of_metadata_block);
+                _ = try file_reader.read(buf);
+                std.debug.print("Unhandled Block Type: {b}\n", .{
+                    buf,
+                });
             },
+        }
+
+        if (block_header.is_last_block == 1) {
+            break;
         }
     }
 
