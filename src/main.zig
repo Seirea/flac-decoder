@@ -71,6 +71,14 @@ pub fn main() !void {
             .padding => {
                 try file_reader.skipBytes(block_header.size_of_metadata_block, .{});
             },
+            .cuesheet => {
+                const cue_sheet = try lib.metadata.block.CueSheet.createFromReader(
+                    file_reader.any(),
+                    allocator,
+                    block_header.size_of_metadata_block,
+                );
+                std.debug.print("CUE SHEET: {}\n", .{cue_sheet});
+            },
             else => {
                 const buf = try allocator.alloc(u8, block_header.size_of_metadata_block);
                 _ = try file_reader.read(buf);

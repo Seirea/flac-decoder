@@ -148,3 +148,59 @@ pub const Application = struct {
         return ret;
     }
 };
+
+pub const CueSheet = struct {
+    media_catalog_num: [128]u8,
+    lead_in_samples: u64,
+    is_cd_da: bool,
+    tracks: []CueTrack,
+
+    pub const CueTrack = struct {
+        track_offset: u64,
+        track_num: u8,
+        ISRC: [12]u8,
+        is_audio: bool,
+        pre_emphasis: bool,
+        index_points: []IndexPoint,
+    };
+    pub const IndexPoint = struct {
+        offset: u64,
+        index_point: u8,
+    };
+
+    pub fn createFromReader(reader: std.io.AnyReader, alloc: std.mem.Allocator, _: u24) !CueSheet {
+        var ret: CueSheet = undefined;
+        var br = std.io.bitReader(.big, reader);
+
+        _ = try reader.readAll(&ret.media_catalog_num);
+
+        ret.lead_in_samples = try reader.readInt(u64, .big);
+
+        ret.is_cd_da = try br.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
+
+        try reader.skipBytes(7 + 258 * 8, .{});
+
+        const track_count = try reader.readInt(u8, .big);
+
+        ret.tracks = try alloc.alloc(CueTrack, track_count);
+
+        for (0..track_count) |i| {
+            ret.tracks[i].track_offset = try reader.readInt(u64, .big);
+            ret.tracks[i].track_num = try reader.readInt(u8, .big);
+            _ = try reader.readAll(&ret.tracks[i].ISRC);
+            ret.tracks[i].is_audio = try br.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
+            ret.tracks[i].pre_emphasis = try br.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
+            try reader.skipBytes(6 + 13 * 8, .{});
+            const index_count = try reader.readInt(u8, .big);
+
+            ret.tracks[i].index_points = try alloc.alloc(IndexPoint, index_count);
+
+            for (0..index_count) |index_point_idx| {
+                ret.tracks[i].index_points[index_point_idx].offset = try reader.readInt(u64, .big);
+                ret.tracks[i].index_points[index_point_idx].index_point = try reader.readInt(u8, .big);
+                try reader.skipBytes(3 * 8, .{});
+            }
+        }
+        return ret;
+    }
+};
