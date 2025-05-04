@@ -77,7 +77,11 @@ pub fn main() !void {
                     allocator,
                     block_header.size_of_metadata_block,
                 );
-                std.debug.print("CUE SHEET: {}\n", .{cue_sheet});
+
+                std.debug.print("CUE TRACKS:\n", .{});
+                for (cue_sheet.tracks) |x| {
+                    std.debug.print("{s} @ {d}\n", .{ x.ISRC, x.track_offset });
+                }
             },
             else => {
                 const buf = try allocator.alloc(u8, block_header.size_of_metadata_block);

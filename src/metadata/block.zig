@@ -153,6 +153,7 @@ pub const CueSheet = struct {
     media_catalog_num: [128]u8,
     lead_in_samples: u64,
     is_cd_da: bool,
+
     tracks: []CueTrack,
 
     pub const CueTrack = struct {
@@ -177,8 +178,9 @@ pub const CueSheet = struct {
         ret.lead_in_samples = try reader.readInt(u64, .big);
 
         ret.is_cd_da = try br.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
-
-        try reader.skipBytes(7 + 258 * 8, .{});
+        // u(7+258*8) Reserved. All bits MUST be set to zero.
+        _ = try br.readBitsNoEof(u1, 7 + 258 * 8);
+        // try br.alignToByte();
 
         const track_count = try reader.readInt(u8, .big);
 
@@ -190,7 +192,11 @@ pub const CueSheet = struct {
             _ = try reader.readAll(&ret.tracks[i].ISRC);
             ret.tracks[i].is_audio = try br.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
             ret.tracks[i].pre_emphasis = try br.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
-            try reader.skipBytes(6 + 13 * 8, .{});
+
+            //  u(6+13*8) Reserved. All bits MUST be set to zero.
+            _ = try br.readBitsNoEof(u1, 6 + 13 * 8);
+
+            // try reader.skipBytes(6 + 13 * 8, .{});
             const index_count = try reader.readInt(u8, .big);
 
             ret.tracks[i].index_points = try alloc.alloc(IndexPoint, index_count);
@@ -198,7 +204,7 @@ pub const CueSheet = struct {
             for (0..index_count) |index_point_idx| {
                 ret.tracks[i].index_points[index_point_idx].offset = try reader.readInt(u64, .big);
                 ret.tracks[i].index_points[index_point_idx].index_point = try reader.readInt(u8, .big);
-                try reader.skipBytes(3 * 8, .{});
+                try reader.skipBytes(3, .{});
             }
         }
         return ret;
