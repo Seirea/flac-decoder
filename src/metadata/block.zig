@@ -41,8 +41,8 @@ pub const Header = packed struct {
     metadata_block_type: Type,
     size_of_metadata_block: u24,
 
-    test "check_size" {
-        std.testing.expectEqual(@bitSizeOf(@This()), 32);
+    test "check header struct size" {
+        std.testing.expectEqual(@bitSizeOf(Header), 32);
     }
 };
 
@@ -57,12 +57,12 @@ pub const StreamInfo = packed struct {
     number_of_interchannel_samples: u36,
     md5_checksum: u128,
 
-    test "check_size" {
-        std.testing.expectEqual(@bitSizeOf(@This()), 32);
+    test "check streaminfo struct size" {
+        std.testing.expectEqual(@sizeOf(StreamInfo), 34);
     }
 };
 
-pub const SeekTable = packed struct {
+pub const SeekTable = struct {
     seek_points: []SeekPoint,
 
     pub const SeekPoint = packed struct {
@@ -70,4 +70,18 @@ pub const SeekTable = packed struct {
         offset_from_first_byte_of_first_frame_header: u64,
         number_of_samples: u16,
     };
+
+    pub fn createFromReader(reader: std.io.AnyReader, alloc: std.mem.Allocator, block_size: u24) !SeekTable {
+        const number_of_seekpoints = block_size / 18;
+
+        var ret = SeekTable{
+            .seek_points = try alloc.alloc(SeekPoint, number_of_seekpoints),
+        };
+
+        for (0..number_of_seekpoints) |i| {
+            ret.seek_points[i] = try getBlockFromReader(SeekPoint, reader);
+        }
+
+        return ret;
+    }
 };

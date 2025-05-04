@@ -23,12 +23,21 @@ pub fn main() !void {
 
         switch (block_header.metadata_block_type) {
             // streaminfo
-            lib.metadata.block.Type.streaminfo => {
+            .streaminfo => {
                 const stream_info = try lib.metadata.block.getBlockFromReader(
                     lib.metadata.block.StreamInfo,
                     file_reader.any(),
                 );
                 std.debug.print("StreamInfo Block: {}\n", .{stream_info});
+            },
+            .seek_table => {
+                const seekTable = try lib.metadata.block.SeekTable.createFromReader(
+                    file_reader.any(),
+                    allocator,
+                    block_header.size_of_metadata_block,
+                );
+
+                std.debug.print("[{d}] SeekTable Block: {}\n", .{ seekTable.seek_points.len, seekTable });
             },
             else => {
                 const buf = try allocator.alloc(u8, block_header.size_of_metadata_block);
