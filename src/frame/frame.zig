@@ -1,4 +1,6 @@
 const std = @import("std");
+const AnyReader = std.io.AnyReader;
+const BitReader = std.io.BitReader;
 
 const ParsingBlockSize = enum(u4) {
     _reserved = 0,
@@ -39,7 +41,7 @@ const ParsingSampleRate = enum(u4) {
     forbidden = 15,
 };
 
-const ParsingChannel = enum(u4) {
+const Channel = enum(u4) {
     mono = 0,
     stero,
     three,
@@ -53,7 +55,7 @@ const ParsingChannel = enum(u4) {
     mid_side,
 };
 
-const ParsingBitDepth = enum(u3) {
+const BitDepth = enum(u3) {
     in_streaminfo = 0b000,
     @"8-bit" = 0b001,
     @"12-bit" = 0b010,
@@ -64,13 +66,37 @@ const ParsingBitDepth = enum(u3) {
     @"32-bit" = 0b111,
 };
 
-const ParsingFrameHeader = packed struct {
-    _sync_code: u15 = 0b111111111111100,
+const FrameHeader = packed struct {
     blocking_strategy: bool, // 0 is fixed block size, 1 is variable
-    block_size_1: ParsingBlockSize, // wtf
-    sample_rate: ParsingSampleRate,
+    block_size: u16,
+    sample_rate: u16,
     channel: ParsingChannel,
     bit_depth: ParsingBitDepth,
+    coded_number: u36,
+    crc: u8,
 };
 
-const SubFrame = struct {};
+fn parseFrameHeader(reader: std.io.AnyReader) FrameHeader {
+    var frame: FrameHeader = undefined;
+    const br = BitReader(.big, reader);
+    if (try br.readBitsNoEof(u15, 15) != 0b111111111111100) {
+        @panic("frame header incorrect");
+    }
+
+    const bs: ParsingBlockSize = @enumFromInt(try reader.readInt(u4, .big));
+    const sr: ParsingSampleRate = @enumFromInt(try reader.readInt(u4, .big));
+    const channel: Channel = @enumFromInt(try reader.readInt(u4, .big));
+    const bd: BitDepth = @enumFromInt(try reader.readInt(u3, .big));
+    // TODO: Finish this
+}
+
+const Frame = struct {
+    header: FrameHeader,
+    sub_frames: []SubFrame,
+};
+
+const SubFrame = struct {
+    _zero_bit: u1 = 0,
+    header: u6,
+    wasted_bits: bool,
+};
