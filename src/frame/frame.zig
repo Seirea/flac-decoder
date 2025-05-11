@@ -79,19 +79,19 @@ const FrameHeader = packed struct {
     coded_number: u36,
     crc: u8,
 
-    // fn parseFrameHeader(reader: std.io.AnyReader) FrameHeader {
-    //     var frame: FrameHeader = undefined;
-    //     const br = BitReader(.big, reader);
-    //     if (try br.readBitsNoEof(u15, 15) != 0b111111111111100) {
-    //         @panic("frame header incorrect");
-    //     }
+    fn parseFrameHeader(reader: std.io.AnyReader) FrameHeader {
+        var frame: FrameHeader = undefined;
+        const br = BitReader(.big, reader);
+        if (try br.readBitsNoEof(u15, 15) != 0b111111111111100) {
+            @panic("frame header incorrect");
+        }
 
-    //     const bs: ParsingBlockSize = @enumFromInt(try reader.readInt(u4, .big));
-    //     const sr: ParsingSampleRate = @enumFromInt(try reader.readInt(u4, .big));
-    //     const channel: Channel = @enumFromInt(try reader.readInt(u4, .big));
-    //     const bd: BitDepth = @enumFromInt(try reader.readInt(u3, .big));
-    //     // TODO: Finish this
-    // }
+        const bs: ParsingBlockSize = @enumFromInt(try reader.readInt(u4, .big));
+        const sr: ParsingSampleRate = @enumFromInt(try reader.readInt(u4, .big));
+        const channel: Channel = @enumFromInt(try reader.readInt(u4, .big));
+        const bd: BitDepth = @enumFromInt(try reader.readInt(u3, .big));
+        // TODO: Finish this
+    }
 };
 
 const SubFrame = struct {
