@@ -1,7 +1,6 @@
 const std = @import("std");
-const BitReader = std.io.BitReader;
 
-const ParsingBlockSize = enum(u4) {
+pub const ParsingBlockSize = enum(u4) {
     _reserved = 0,
     @"192" = 1,
     @"576" = 2,
@@ -21,7 +20,7 @@ const ParsingBlockSize = enum(u4) {
 };
 
 // in kHz
-const ParsingSampleRate = enum(u4) {
+pub const ParsingSampleRate = enum(u4) {
     in_streaminfo = 0,
     @"88.2" = 1,
     @"176.4" = 2,
@@ -40,9 +39,9 @@ const ParsingSampleRate = enum(u4) {
     forbidden = 15,
 };
 
-const Channel = enum(u4) {
+pub const Channel = enum(u4) {
     mono = 0,
-    stero,
+    stereo,
     three,
     four,
     five,
@@ -54,7 +53,7 @@ const Channel = enum(u4) {
     mid_side,
 };
 
-const BitDepth = enum(u3) {
+pub const BitDepth = enum(u3) {
     in_streaminfo = 0b000,
     @"8-bit" = 0b001,
     @"12-bit" = 0b010,
@@ -65,36 +64,89 @@ const BitDepth = enum(u3) {
     @"32-bit" = 0b111,
 };
 
-const Frame = struct {
+pub const Frame = struct {
     header: FrameHeader,
     sub_frames: []SubFrame,
 };
 
-const FrameHeader = packed struct {
+pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: *std.io.BitReader(.big, std.io.AnyReader)) !Enum {
+    const int_representation = @typeInfo(Enum).@"enum".tag_type;
+    return @enumFromInt(try bit_reader.readBitsNoEof(int_representation, @bitSizeOf(int_representation)));
+}
+
+pub const FrameHeader = struct {
     blocking_strategy: bool, // 0 is fixed block size, 1 is variable
     block_size: u16,
-    sample_rate: u16,
+    sample_rate: ParsingSampleRate,
+    unusual_sample_rate: ?u18 = null,
     channel: Channel,
     bit_depth: BitDepth,
     coded_number: u36,
     crc: u8,
 
-    fn parseFrameHeader(reader: std.io.AnyReader) FrameHeader {
-        var frame: FrameHeader = undefined;
-        const br = BitReader(.big, reader);
+    pub fn parseFrameHeader(reader: std.io.AnyReader) !FrameHeader {
+        var frame_header: FrameHeader = undefined;
+        frame_header.unusual_sample_rate = null;
+
+        var br = std.io.bitReader(.big, reader);
         if (try br.readBitsNoEof(u15, 15) != 0b111111111111100) {
             @panic("frame header incorrect");
         }
 
-        const bs: ParsingBlockSize = @enumFromInt(try reader.readInt(u4, .big));
-        const sr: ParsingSampleRate = @enumFromInt(try reader.readInt(u4, .big));
-        const channel: Channel = @enumFromInt(try reader.readInt(u4, .big));
-        const bd: BitDepth = @enumFromInt(try reader.readInt(u3, .big));
-        // TODO: Finish this
+        frame_header.blocking_strategy = try br.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
+
+        const bs = try readCustomIntToEnum(ParsingBlockSize, &br);
+        frame_header.sample_rate = try readCustomIntToEnum(ParsingSampleRate, &br);
+        frame_header.channel = try readCustomIntToEnum(Channel, &br);
+        frame_header.bit_depth = try readCustomIntToEnum(BitDepth, &br);
+        frame_header.coded_number = try decodeNumber(reader);
+
+        frame_header.block_size = switch (bs) {
+            .uncommon_8bit => try reader.readInt(u8, .big),
+            .uncommon_16bit => try reader.readInt(u16, .big),
+            .@"192" => 192,
+            .@"576" => 576,
+            .@"1152" => 1152,
+            .@"2304" => 2304,
+            .@"4608" => 4608,
+            .@"256" => 256,
+            .@"512" => 512,
+            .@"1024" => 1024,
+            .@"2048" => 2048,
+            .@"4096" => 4096,
+            .@"8192" => 8192,
+            .@"16384" => 16384,
+            .@"32768" => 32768,
+            ._reserved => {
+                @panic("Reserved block size");
+            },
+        };
+
+        switch (frame_header.sample_rate) {
+            .uncommon_8bit => {
+                frame_header.unusual_sample_rate = @as(u18, try reader.readInt(u8, .big)) * 1000;
+            },
+            .uncommon_16bit => {
+                frame_header.unusual_sample_rate = try reader.readInt(u16, .big);
+            },
+            .uncommon_16bit_div_10 => {
+                // TODO: Fix this to be more accurate to the RFC
+                frame_header.unusual_sample_rate = @divFloor(try reader.readInt(u16, .big), 10);
+            },
+            .forbidden => {
+                @panic("Forbidden sample rate");
+            },
+            else => {},
+        }
+
+        // TODO: check if this is actualy right
+        frame_header.crc = try reader.readInt(u8, .big);
+
+        return frame_header;
     }
 };
 
-const SubFrame = struct {
+pub const SubFrame = struct {
     _zero_bit: u1 = 0,
     header: u6,
     wasted_bits: bool,

@@ -108,6 +108,11 @@ pub fn main() !void {
 
     metadata_arena.deinit();
 
+    std.debug.print("Reading frame 1\n", .{});
+
+    const frame = try lib.frame.FrameHeader.parseFrameHeader(file_reader.any());
+    std.debug.print("PARSED FRAME: {}\n", .{frame});
+
     file.close();
     // file_reader.readStruct(comptime T: type)
 }
