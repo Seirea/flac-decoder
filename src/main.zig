@@ -11,8 +11,14 @@ pub fn main() !void {
     const file = try std.fs.cwd().openFile("test/a.flac", .{});
     const file_reader = file.reader();
 
-    const sig = try file_reader.readStruct(Signature);
+    const sig: Signature = try file_reader.readStruct(Signature);
     std.debug.print("{s}\n", sig);
+
+    if (!std.mem.eql(u8, &sig.sig, "fLaC")) {
+        @panic("FLAC Magic Bytes mismatch! Is this a FLAC File?");
+    }
+
+    var metadata_arena = std.heap.ArenaAllocator.init(allocator);
 
     // read metadata
     while (true) {
@@ -29,12 +35,13 @@ pub fn main() !void {
                     lib.metadata.block.StreamInfo,
                     file_reader.any(),
                 );
+
                 std.debug.print("StreamInfo Block: {}\n", .{stream_info});
             },
             .seek_table => {
                 const seek_table = try lib.metadata.block.SeekTable.createFromReader(
                     file_reader.any(),
-                    allocator,
+                    metadata_arena.allocator(),
                     block_header.size_of_metadata_block,
                 );
 
@@ -43,7 +50,7 @@ pub fn main() !void {
             .vorbis_comment => {
                 const vorbis_comment = try lib.metadata.vorbis.VorbisComment.createFromReader(
                     file_reader.any(),
-                    allocator,
+                    metadata_arena.allocator(),
                 );
                 std.debug.print("Vorbis Comment Vendor String: {s}\n", .{vorbis_comment.vendor_string});
                 for (vorbis_comment.user_comments) |x| {
@@ -53,7 +60,7 @@ pub fn main() !void {
             .picture => {
                 const picture = try lib.metadata.block.Picture.createFromReader(
                     file_reader.any(),
-                    allocator,
+                    metadata_arena.allocator(),
                 );
                 std.debug.print("Image type: {s} | description: {s}\n", .{
                     picture.media_type_string,
@@ -63,7 +70,7 @@ pub fn main() !void {
             .application => {
                 const app = try lib.metadata.block.Application.createFromReader(
                     file_reader.any(),
-                    allocator,
+                    metadata_arena.allocator(),
                     block_header.size_of_metadata_block,
                 );
                 std.debug.print("{}", .{app});
@@ -74,7 +81,7 @@ pub fn main() !void {
             .cuesheet => {
                 const cue_sheet = try lib.metadata.block.CueSheet.createFromReader(
                     file_reader.any(),
-                    allocator,
+                    metadata_arena.allocator(),
                     block_header.size_of_metadata_block,
                 );
 
@@ -98,6 +105,8 @@ pub fn main() !void {
     }
 
     std.debug.print("Metadata read\n", .{});
+
+    metadata_arena.deinit();
 
     file.close();
     // file_reader.readStruct(comptime T: type)
