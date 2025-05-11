@@ -20,6 +20,7 @@ pub fn main() !void {
 
     var metadata_arena = std.heap.ArenaAllocator.init(allocator);
 
+    std.debug.print("{d}\n", .{try lib.frame.decodeNumber(file_reader.any())});
     // read metadata
     while (true) {
         const block_header = try lib.metadata.block.getBlockFromReader(
