@@ -6,6 +6,7 @@ const FrameParsingError = error{
     missing_zero_bit, // subframe
     forbidden_sample_rate,
     using_reserved_value,
+    stream_info_does_not_exist,
 };
 
 pub const ParsingBlockSize = enum(u4) {
@@ -72,9 +73,15 @@ pub const BitDepth = enum(u3) {
     @"32-bit" = 0b111,
 
     /// Returns bitdepth-1 aka [0 ... 31] => [1 ... 32] :)
-    pub fn asIntMinusOne(self: BitDepth, stream_info: StreamInfo) FrameParsingError!u5 {
+    pub fn asIntMinusOne(self: BitDepth, stream_info: ?StreamInfo) FrameParsingError!u5 {
         return switch (self) {
-            .in_streaminfo => stream_info.bits_per_sample_minus_one,
+            .in_streaminfo => blk: {
+                if (stream_info) |si| {
+                    break :blk si.bits_per_sample_minus_one;
+                } else {
+                    break :blk error.stream_info_does_not_exist;
+                }
+            },
             .@"8-bit" => 7,
             .@"12-bit" => 11,
             .reserved => error.using_reserved_value,
@@ -183,10 +190,10 @@ pub const Block = union(enum) {
 
 pub const SubFrame = struct {
     header: SubFrameHeader,
-    wasted_bits: ?u8,
+    wasted_bits: u8,
     block: Block,
 
-    pub fn parseSubframe(reader: std.io.AnyReader, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: StreamInfo) !SubFrame {
+    pub fn parseSubframe(reader: std.io.AnyReader, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo) !SubFrame {
         var subframe: SubFrame = undefined;
         var br = std.io.bitReader(.big, reader);
 
@@ -196,13 +203,13 @@ pub const SubFrame = struct {
         subframe.header = switch (header) {
             0 => .constant,
             1 => .verbatim,
-            2...7 => return error.using_reserved_value,
-            8...12 => |x| SubFrameHeader{ .fixed_predictor = x - 8 },
-            13...31 => return error.using_reserved_value,
-            else => |x| SubFrameHeader{ .linear_predictor = -x - 31 },
+            0b000010...0b000111 => return error.using_reserved_value,
+            0b001000...0b001100 => |x| SubFrameHeader{ .fixed_predictor = x - 8 },
+            0b001101...0b011111 => return error.using_reserved_value,
+            0b100000...0b111111 => |x| SubFrameHeader{ .linear_predictor = x - 31 },
         };
 
-        subframe.wasted_bits = null;
+        subframe.wasted_bits = 0;
         if (try br.readBitsNoEof(u1, 1) == 1) {
             var num: u8 = 1;
             while (try br.readBitsNoEof(u1, 1) == 0) : (num += 1) {}
@@ -210,7 +217,7 @@ pub const SubFrame = struct {
         }
 
         const bit_depth = try frame.bit_depth.asIntMinusOne(stream_info);
-        const wasted = subframe.wasted_bits orelse 0;
+        const wasted = subframe.wasted_bits;
 
         subframe.block = switch (subframe.header) {
             .constant => Block{ .constant = try br.readBitsNoEof(u32, bit_depth - wasted) },
