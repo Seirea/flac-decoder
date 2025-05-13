@@ -1,4 +1,12 @@
 const std = @import("std");
+const StreamInfo = @import("../metadata/block.zig").StreamInfo;
+
+const FrameParsingError = error{
+    incorrect_frame_sync,
+    missing_zero_bit, // subframe
+    forbidden_sample_rate,
+    using_reserved_value,
+};
 
 pub const ParsingBlockSize = enum(u4) {
     _reserved = 0,
@@ -62,6 +70,20 @@ pub const BitDepth = enum(u3) {
     @"20-bit" = 0b101,
     @"24-bit" = 0b110,
     @"32-bit" = 0b111,
+
+    /// Returns bitdepth-1 aka [0 ... 31] => [1 ... 32] :)
+    pub fn asIntMinusOne(self: BitDepth, stream_info: StreamInfo) FrameParsingError!u5 {
+        return switch (self) {
+            .in_streaminfo => stream_info.bits_per_sample_minus_one,
+            .@"8-bit" => 7,
+            .@"12-bit" => 11,
+            .reserved => error.using_reserved_value,
+            .@"16-bit" => 15,
+            .@"20-bit" => 19,
+            .@"24-bit" => 23,
+            .@"32-bit" => 31,
+        };
+    }
 };
 
 pub const Frame = struct {
@@ -90,7 +112,7 @@ pub const FrameHeader = struct {
 
         var br = std.io.bitReader(.big, reader);
         if (try br.readBitsNoEof(u15, 15) != 0b111111111111100) {
-            @panic("frame header incorrect");
+            return error.incorrect_frame_sync;
         }
 
         frame_header.blocking_strategy = try br.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
@@ -118,7 +140,7 @@ pub const FrameHeader = struct {
             .@"16384" => 16384,
             .@"32768" => 32768,
             ._reserved => {
-                @panic("Reserved block size");
+                return error.using_reserved_value;
             },
         };
 
@@ -134,7 +156,7 @@ pub const FrameHeader = struct {
                 frame_header.unusual_sample_rate = @divFloor(try reader.readInt(u16, .big), 10);
             },
             .forbidden => {
-                @panic("Forbidden sample rate");
+                return error.forbidden_sample_rate;
             },
             else => {},
         }
@@ -146,10 +168,64 @@ pub const FrameHeader = struct {
     }
 };
 
+pub const SubFrameHeader = union(enum) {
+    constant,
+    verbatim,
+    fixed_predictor: u3,
+    linear_predictor: u5,
+};
+
+pub const Block = union(enum) {
+    constant: i32,
+    verbatim: []i32,
+    // TODO: Add more block types
+};
+
 pub const SubFrame = struct {
-    _zero_bit: u1 = 0,
-    header: u6,
-    wasted_bits: bool,
+    header: SubFrameHeader,
+    wasted_bits: ?u8,
+    block: Block,
+
+    pub fn parseSubframe(reader: std.io.AnyReader, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: StreamInfo) !SubFrame {
+        var subframe: SubFrame = undefined;
+        var br = std.io.bitReader(.big, reader);
+
+        if (try br.readBitsNoEof(u1, 1) != 0) return error.missing_zero_bit;
+
+        const header = try br.readBitsNoEof(u6, 6);
+        subframe.header = switch (header) {
+            0 => .constant,
+            1 => .verbatim,
+            2...7 => return error.using_reserved_value,
+            8...12 => |x| SubFrameHeader{ .fixed_predictor = x - 8 },
+            13...31 => return error.using_reserved_value,
+            else => |x| SubFrameHeader{ .linear_predictor = -x - 31 },
+        };
+
+        subframe.wasted_bits = null;
+        if (try br.readBitsNoEof(u1, 1) == 1) {
+            var num: u8 = 1;
+            while (try br.readBitsNoEof(u1, 1) == 0) : (num += 1) {}
+            subframe.wasted_bits = num;
+        }
+
+        const bit_depth = try frame.bit_depth.asIntMinusOne(stream_info);
+        const wasted = subframe.wasted_bits orelse 0;
+
+        subframe.block = switch (subframe.header) {
+            .constant => Block{ .constant = try br.readBitsNoEof(u32, bit_depth - wasted) },
+            .verbatim => blk: {
+                var buf = try alloc.alloc(u32, frame.block_size);
+                for (0..buf.len) |i| {
+                    buf[i] = try br.readBitsNoEof(u32, bit_depth - wasted);
+                }
+                break :blk Block{ .verbatim = buf };
+            },
+            else => @panic("TODO: impl others :)"),
+        };
+
+        return subframe;
+    }
 };
 
 pub fn decodeNumber(reader: std.io.AnyReader) !u36 {
