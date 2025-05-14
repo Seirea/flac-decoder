@@ -1,5 +1,6 @@
 const std = @import("std");
 const StreamInfo = @import("../metadata/block.zig").StreamInfo;
+const crc = std.hash.crc.Crc8I4321;
 
 const FrameParsingError = error{
     incorrect_frame_sync,
@@ -98,10 +99,32 @@ pub const Frame = struct {
     sub_frames: []SubFrame,
 };
 
-pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: *std.io.BitReader(.big, std.io.AnyReader)) !Enum {
+pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: *BitReaderToCRCWriter) !Enum {
     const int_representation = @typeInfo(Enum).@"enum".tag_type;
+
     return @enumFromInt(try bit_reader.readBitsNoEof(int_representation, @bitSizeOf(int_representation)));
 }
+
+pub const CrcWriter = struct {
+    crc_obj: *std.hash.crc.Crc8I4321,
+
+    pub fn writeByte(self: *CrcWriter, bits: u8) !void {
+        self.crc_obj.update(&[1]u8{bits});
+    }
+};
+
+pub const BitReaderToCRCWriter = struct {
+    br: *std.io.BitReader(.big, std.io.AnyReader),
+    bw: *std.io.BitWriter(.big, CrcWriter),
+
+    // fn readBitsNoEof
+    fn readBitsNoEof(self: *BitReaderToCRCWriter, comptime T: type, num: u16) !T {
+        const read = try self.br.readBitsNoEof(T, num);
+        try self.bw.writeBits(read, num);
+
+        return read;
+    }
+};
 
 pub const FrameHeader = struct {
     blocking_strategy: bool, // 0 is fixed block size, 1 is variable
@@ -114,20 +137,30 @@ pub const FrameHeader = struct {
     crc: u8,
 
     pub fn parseFrameHeader(reader: std.io.AnyReader) !FrameHeader {
+        var hasher: std.hash.crc.Crc8I4321 = crc.init();
+        const crc_writer = CrcWriter{ .crc_obj = &hasher };
+
+        var br = std.io.bitReader(.big, reader);
+        var bw = std.io.bitWriter(.big, crc_writer);
+
+        var br_and_writer = BitReaderToCRCWriter{
+            .br = &br,
+            .bw = &bw,
+        };
+
         var frame_header: FrameHeader = undefined;
         frame_header.unusual_sample_rate = null;
 
-        var br = std.io.bitReader(.big, reader);
         if (try br.readBitsNoEof(u15, 15) != 0b111111111111100) {
             return error.incorrect_frame_sync;
         }
 
         frame_header.blocking_strategy = try br.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
 
-        const bs = try readCustomIntToEnum(ParsingBlockSize, &br);
-        frame_header.sample_rate = try readCustomIntToEnum(ParsingSampleRate, &br);
-        frame_header.channel = try readCustomIntToEnum(Channel, &br);
-        frame_header.bit_depth = try readCustomIntToEnum(BitDepth, &br);
+        const bs = try readCustomIntToEnum(ParsingBlockSize, &br_and_writer);
+        frame_header.sample_rate = try readCustomIntToEnum(ParsingSampleRate, &br_and_writer);
+        frame_header.channel = try readCustomIntToEnum(Channel, &br_and_writer);
+        frame_header.bit_depth = try readCustomIntToEnum(BitDepth, &br_and_writer);
         frame_header.coded_number = try decodeNumber(reader);
 
         frame_header.block_size = switch (bs) {
@@ -168,7 +201,8 @@ pub const FrameHeader = struct {
             else => {},
         }
 
-        // TODO: check if this is actualy right
+        // TODO: Finish this implementation
+        std.debug.print("crc8: {}\n", .{hasher.final()});
         frame_header.crc = try reader.readInt(u8, .big);
 
         return frame_header;
@@ -228,6 +262,7 @@ pub const SubFrame = struct {
                 }
                 break :blk Block{ .verbatim = buf };
             },
+            // TODO: implement the rest
             else => @panic("TODO: impl others :)"),
         };
 
