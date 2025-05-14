@@ -105,35 +105,38 @@ pub const Frame = struct {
     sub_frames: []SubFrame,
 };
 
-pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: *BitReaderToCRCWriter) !Enum {
+pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: anytype) !Enum {
     const int_representation = @typeInfo(Enum).@"enum".tag_type;
 
     return @enumFromInt(try bit_reader.readBitsNoEof(int_representation, @bitSizeOf(int_representation)));
 }
 
-pub const CrcWriter = struct {
-    crc_obj: *crc8,
+pub fn CrcWriter(comptime T: type) type {
+    return struct {
+        crc_obj: *T,
 
-    pub fn writeByte(self: *CrcWriter, bits: u8) !void {
-        const out = [1]u8{bits};
-        self.crc_obj.update(&out);
-        std.debug.print("wrote: {b}\n", .{out});
-    }
-};
+        pub fn writeByte(self: *CrcWriter(T), bits: u8) !void {
+            const out = [1]u8{bits};
+            self.crc_obj.update(&out);
+            std.debug.print("wrote: {b}\n", .{out});
+        }
+    };
+}
 
-pub const BitReaderToCRCWriter = struct {
-    br: *std.io.BitReader(.big, std.io.AnyReader),
-    bw: *std.io.BitWriter(.big, CrcWriter),
+pub fn BitReaderToCRCWriter(comptime T: type) type {
+    return struct {
+        br: *std.io.BitReader(.big, std.io.AnyReader),
+        bw: *std.io.BitWriter(.big, CrcWriter(T)),
 
-    // fn readBitsNoEof
-    fn readBitsNoEof(self: *BitReaderToCRCWriter, comptime T: type, num: u16) !T {
-        const read = try self.br.readBitsNoEof(T, num);
-        try self.bw.writeBits(read, num);
+        // fn readBitsNoEof
+        fn readBitsNoEof(self: *BitReaderToCRCWriter(T), comptime I: type, num: u16) !I {
+            const read = try self.br.readBitsNoEof(I, num);
+            try self.bw.writeBits(read, num);
 
-        return read;
-    }
-};
-
+            return read;
+        }
+    };
+}
 pub const FrameHeader = struct {
     blocking_strategy: bool, // 0 is fixed block size, 1 is variable
     block_size: u16,
@@ -146,12 +149,12 @@ pub const FrameHeader = struct {
 
     pub fn parseFrameHeader(reader: std.io.AnyReader) !FrameHeader {
         var hasher = crc8.init();
-        const crc_writer = CrcWriter{ .crc_obj = &hasher };
+        const crc_writer = CrcWriter(crc8){ .crc_obj = &hasher };
 
         var br = std.io.bitReader(.big, reader);
         var bw = std.io.bitWriter(.big, crc_writer);
 
-        var br_and_writer = BitReaderToCRCWriter{
+        var br_and_writer = BitReaderToCRCWriter(crc8){
             .br = &br,
             .bw = &bw,
         };
