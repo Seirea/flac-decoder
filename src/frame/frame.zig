@@ -14,6 +14,7 @@ const FrameParsingError = error{
     forbidden_sample_rate,
     using_reserved_value,
     stream_info_does_not_exist,
+    crc_mismatch,
 };
 
 pub const ParsingBlockSize = enum(u4) {
@@ -118,20 +119,36 @@ pub fn CrcWriter(comptime T: type) type {
         pub fn writeByte(self: *CrcWriter(T), bits: u8) !void {
             const out = [1]u8{bits};
             self.crc_obj.update(&out);
-            std.debug.print("wrote: {b}\n", .{out});
+            // std.debug.print("wrote: {X}\n", .{out});
         }
     };
 }
 
-pub fn BitReaderToCRCWriter(comptime T: type) type {
+pub fn ReaderToCRCWriter(comptime T: type) type {
     return struct {
-        br: *std.io.BitReader(.big, std.io.AnyReader),
+        reader: std.io.AnyReader,
+        br: std.io.BitReader(.big, std.io.AnyReader),
         bw: *std.io.BitWriter(.big, CrcWriter(T)),
 
+        fn init(reader: std.io.AnyReader, bw: *std.io.BitWriter(.big, CrcWriter(T))) ReaderToCRCWriter(T) {
+            return .{
+                .reader = reader,
+                .br = std.io.bitReader(.big, reader),
+                .bw = bw,
+            };
+        }
+
         // fn readBitsNoEof
-        fn readBitsNoEof(self: *BitReaderToCRCWriter(T), comptime I: type, num: u16) !I {
+        fn readBitsNoEof(self: *ReaderToCRCWriter(T), comptime I: type, num: u16) !I {
             const read = try self.br.readBitsNoEof(I, num);
             try self.bw.writeBits(read, num);
+
+            return read;
+        }
+
+        fn readInt(self: *ReaderToCRCWriter(T), comptime I: type, endian: std.builtin.Endian) !I {
+            const read = try self.reader.readInt(I, endian);
+            try self.bw.writeBits(read, @bitSizeOf(I));
 
             return read;
         }
@@ -151,32 +168,33 @@ pub const FrameHeader = struct {
         var hasher = crc8.init();
         const crc_writer = CrcWriter(crc8){ .crc_obj = &hasher };
 
-        var br = std.io.bitReader(.big, reader);
         var bw = std.io.bitWriter(.big, crc_writer);
 
-        var br_and_writer = BitReaderToCRCWriter(crc8){
-            .br = &br,
-            .bw = &bw,
-        };
+        var crc_reader = ReaderToCRCWriter(crc8).init(reader, &bw);
 
         var frame_header: FrameHeader = undefined;
         frame_header.unusual_sample_rate = null;
 
-        if (try br.readBitsNoEof(u15, 15) != 0b111111111111100) {
+        if (try crc_reader.readBitsNoEof(u15, 15) != 0b111111111111100) {
             return error.incorrect_frame_sync;
         }
 
-        frame_header.blocking_strategy = try br.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
+        frame_header.blocking_strategy = try crc_reader.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
 
-        const bs = try readCustomIntToEnum(ParsingBlockSize, &br_and_writer);
-        frame_header.sample_rate = try readCustomIntToEnum(ParsingSampleRate, &br_and_writer);
-        frame_header.channel = try readCustomIntToEnum(Channel, &br_and_writer);
-        frame_header.bit_depth = try readCustomIntToEnum(BitDepth, &br_and_writer);
-        frame_header.coded_number = try decodeNumber(reader);
+        const bs = try readCustomIntToEnum(ParsingBlockSize, &crc_reader);
+        frame_header.sample_rate = try readCustomIntToEnum(ParsingSampleRate, &crc_reader);
+        frame_header.channel = try readCustomIntToEnum(Channel, &crc_reader);
+        frame_header.bit_depth = try readCustomIntToEnum(BitDepth, &crc_reader);
+
+        if (try crc_reader.readBitsNoEof(u1, 1) != 0) {
+            return error.using_reserved_value;
+        }
+
+        frame_header.coded_number = try decodeNumber(&crc_reader);
 
         frame_header.block_size = switch (bs) {
-            .uncommon_8bit => try reader.readInt(u8, .big),
-            .uncommon_16bit => try reader.readInt(u16, .big),
+            .uncommon_8bit => try crc_reader.readInt(u8, .big),
+            .uncommon_16bit => try crc_reader.readInt(u16, .big),
             .@"192" => 192,
             .@"576" => 576,
             .@"1152" => 1152,
@@ -197,14 +215,14 @@ pub const FrameHeader = struct {
 
         switch (frame_header.sample_rate) {
             .uncommon_8bit => {
-                frame_header.unusual_sample_rate = @as(u18, try reader.readInt(u8, .big)) * 1000;
+                frame_header.unusual_sample_rate = @as(u18, try crc_reader.readInt(u8, .big)) * 1000;
             },
             .uncommon_16bit => {
-                frame_header.unusual_sample_rate = try reader.readInt(u16, .big);
+                frame_header.unusual_sample_rate = try crc_reader.readInt(u16, .big);
             },
             .uncommon_16bit_div_10 => {
                 // TODO: Fix this to be more accurate to the RFC
-                frame_header.unusual_sample_rate = @divFloor(try reader.readInt(u16, .big), 10);
+                frame_header.unusual_sample_rate = @divFloor(try crc_reader.readInt(u16, .big), 10);
             },
             .forbidden => {
                 return error.forbidden_sample_rate;
@@ -212,10 +230,15 @@ pub const FrameHeader = struct {
             else => {},
         }
 
-        try br_and_writer.bw.flushBits();
-        // TODO: Finish this implementation
-        std.debug.print("crc8: {}, {b}\n", .{ hasher.final(), br_and_writer.bw.bits });
+        try crc_reader.bw.flushBits();
+
+        // std.debug.print("crc8: {}, {b}\n", .{ hasher.final(), crc_reader.bw.bits });
         frame_header.crc = try reader.readInt(u8, .big);
+
+        // CRC Check (return error if failed)
+        if (hasher.final() != frame_header.crc) {
+            return error.crc_mismatch;
+        }
 
         return frame_header;
     }
@@ -282,7 +305,7 @@ pub const SubFrame = struct {
     }
 };
 
-pub fn decodeNumber(reader: std.io.AnyReader) !u36 {
+pub fn decodeNumber(reader: anytype) !u36 {
     var ret: u36 = 0;
     const first = try reader.readInt(u8, .big);
 
