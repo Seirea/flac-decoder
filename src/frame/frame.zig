@@ -1,6 +1,12 @@
 const std = @import("std");
 const StreamInfo = @import("../metadata/block.zig").StreamInfo;
-const crc = std.hash.crc.Crc8I4321;
+const crc8 = std.hash.crc.Crc(u8, .{
+    .polynomial = 0x07,
+    .initial = 0x00,
+    .reflect_input = false,
+    .reflect_output = false,
+    .xor_output = 0x0,
+});
 
 const FrameParsingError = error{
     incorrect_frame_sync,
@@ -106,10 +112,12 @@ pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: *BitReaderToCRCWrite
 }
 
 pub const CrcWriter = struct {
-    crc_obj: *std.hash.crc.Crc8I4321,
+    crc_obj: *crc8,
 
     pub fn writeByte(self: *CrcWriter, bits: u8) !void {
-        self.crc_obj.update(&[1]u8{bits});
+        const out = [1]u8{bits};
+        self.crc_obj.update(&out);
+        std.debug.print("wrote: {b}\n", .{out});
     }
 };
 
@@ -137,7 +145,7 @@ pub const FrameHeader = struct {
     crc: u8,
 
     pub fn parseFrameHeader(reader: std.io.AnyReader) !FrameHeader {
-        var hasher: std.hash.crc.Crc8I4321 = crc.init();
+        var hasher = crc8.init();
         const crc_writer = CrcWriter{ .crc_obj = &hasher };
 
         var br = std.io.bitReader(.big, reader);
@@ -201,8 +209,9 @@ pub const FrameHeader = struct {
             else => {},
         }
 
+        try br_and_writer.bw.flushBits();
         // TODO: Finish this implementation
-        std.debug.print("crc8: {}\n", .{hasher.final()});
+        std.debug.print("crc8: {}, {b}\n", .{ hasher.final(), br_and_writer.bw.bits });
         frame_header.crc = try reader.readInt(u8, .big);
 
         return frame_header;
@@ -335,4 +344,15 @@ test "decodeNumber" {
         var reader = std.io.fixedBufferStream(&[_]u8{ 0b11111101, 0b10111011, 0b10101110, 0b10111011, 0b10101110, 0b10111111 });
         try std.testing.expectEqual(2075900863, try decodeNumber(reader.reader().any()));
     }
+}
+
+test "check crc" {
+    try std.testing.expectEqual(0xe9, crc8.hash(&[_]u8{
+        0xff,
+        0xf8,
+        0x68,
+        0x02,
+        0x00,
+        0x17,
+    }));
 }
