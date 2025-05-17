@@ -7,6 +7,7 @@ const crc8 = std.hash.crc.Crc(u8, .{
     .reflect_output = false,
     .xor_output = 0x0,
 });
+const crc16 = std.hash.crc.Crc16Modbus;
 
 const FrameParsingError = error{
     incorrect_frame_sync,
@@ -68,6 +69,12 @@ pub const Channel = enum(u4) {
     left_side,
     side_right,
     mid_side,
+    pub fn asNum(self: Channel) u4 {
+        return switch (self) {
+            .left_side, .side_right, .mid_side => 2,
+            else => @intFromEnum(self) + 1,
+        };
+    }
 };
 
 pub const BitDepth = enum(u3) {
@@ -104,6 +111,37 @@ pub const BitDepth = enum(u3) {
 pub const Frame = struct {
     header: FrameHeader,
     sub_frames: []SubFrame,
+    footer: u16,
+    pub fn parseFrame(reader: std.io.AnyReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
+        var frame: Frame = undefined;
+
+        var hasher = crc16.init();
+        const crc_writer = CrcWriter(crc16){ .crc_obj = &hasher };
+        var bw = std.io.bitWriter(.big, crc_writer);
+        var crc_reader = ReaderToCRCWriter(crc16).init(reader, &bw);
+
+        frame.header = try FrameHeader.parseFrameHeader(crc_reader.any());
+        var sub_frames: [8]?SubFrame = @splat(null);
+        const sub_count = frame.header.channel.asNum();
+
+        for (0..sub_count) |n| {
+            sub_frames[n] = try SubFrame.parseSubframe(crc_reader, alloc, frame.header, stream_info);
+        }
+        frame.sub_frames = @as([8]SubFrame, sub_frames)[0..sub_count];
+        // TODO: align to byte?
+        frame.footer = try reader.readInt(u16, .big);
+        try crc_reader.bw.flushBits();
+
+        // CRC Check (return error if failed)
+        if (hasher.final() != frame.footer) {
+            return error.crc_mismatch;
+        }
+
+        return frame;
+    }
+    pub fn calculateSamples(_: Frame) []i32 {
+        @panic("TODO");
+    }
 };
 
 pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: anytype) !Enum {
@@ -137,20 +175,38 @@ pub fn ReaderToCRCWriter(comptime T: type) type {
                 .bw = bw,
             };
         }
+        pub fn any(self: @This()) std.io.AnyReader {
+            return .{ .context = @ptrCast(&self), .readFn = typeErasedReadFn };
+        }
+
+        pub fn read(self: *ReaderToCRCWriter(T), buffer: []u8) !usize {
+            const res = try self.reader.read(buffer);
+            for (buffer[0..res]) |byte| {
+                try self.bw.writeBits(byte, 8);
+            }
+            return res;
+        }
+        pub fn readByte(self: *ReaderToCRCWriter(T)) !u8 {
+            return self.any().readByte();
+        }
+        fn typeErasedReadFn(context: *const anyopaque, buffer: []u8) anyerror!usize {
+            const ptr: *ReaderToCRCWriter(T) = @alignCast(@ptrCast(@constCast(context)));
+            return read(ptr, buffer);
+        }
 
         // fn readBitsNoEof
         fn readBitsNoEof(self: *ReaderToCRCWriter(T), comptime I: type, num: u16) !I {
-            const read = try self.br.readBitsNoEof(I, num);
-            try self.bw.writeBits(read, num);
+            const readed = try self.br.readBitsNoEof(I, num);
+            try self.bw.writeBits(readed, num);
 
-            return read;
+            return readed;
         }
 
         fn readInt(self: *ReaderToCRCWriter(T), comptime I: type, endian: std.builtin.Endian) !I {
-            const read = try self.reader.readInt(I, endian);
-            try self.bw.writeBits(read, @bitSizeOf(I));
+            const readed = try self.reader.readInt(I, endian);
+            try self.bw.writeBits(readed, @bitSizeOf(I));
 
-            return read;
+            return readed;
         }
     };
 }
@@ -262,7 +318,7 @@ pub const SubFrame = struct {
     wasted_bits: u8,
     block: Block,
 
-    pub fn parseSubframe(reader: std.io.AnyReader, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo) !SubFrame {
+    pub fn parseSubframe(reader: anytype, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo) !SubFrame {
         var subframe: SubFrame = undefined;
         var br = std.io.bitReader(.big, reader);
 
@@ -273,9 +329,9 @@ pub const SubFrame = struct {
             0 => .constant,
             1 => .verbatim,
             0b000010...0b000111 => return error.using_reserved_value,
-            0b001000...0b001100 => |x| SubFrameHeader{ .fixed_predictor = x - 8 },
+            0b001000...0b001100 => |x| SubFrameHeader{ .fixed_predictor = @intCast(x - 8) },
             0b001101...0b011111 => return error.using_reserved_value,
-            0b100000...0b111111 => |x| SubFrameHeader{ .linear_predictor = x - 31 },
+            0b100000...0b111111 => |x| SubFrameHeader{ .linear_predictor = @intCast(x - 31) },
         };
 
         subframe.wasted_bits = 0;
@@ -289,11 +345,11 @@ pub const SubFrame = struct {
         const wasted = subframe.wasted_bits;
 
         subframe.block = switch (subframe.header) {
-            .constant => Block{ .constant = try br.readBitsNoEof(u32, bit_depth - wasted) },
+            .constant => Block{ .constant = try br.readBitsNoEof(i32, bit_depth - wasted) },
             .verbatim => blk: {
-                var buf = try alloc.alloc(u32, frame.block_size);
+                var buf = try alloc.alloc(i32, frame.block_size);
                 for (0..buf.len) |i| {
-                    buf[i] = try br.readBitsNoEof(u32, bit_depth - wasted);
+                    buf[i] = try br.readBitsNoEof(i32, bit_depth - wasted);
                 }
                 break :blk Block{ .verbatim = buf };
             },

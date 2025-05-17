@@ -20,6 +20,8 @@ pub fn main() !void {
 
     var metadata_arena = std.heap.ArenaAllocator.init(allocator);
 
+    var stream_info: ?lib.metadata.block.StreamInfo = null;
+
     // read metadata
     while (true) {
         const block_header = try lib.metadata.block.getBlockFromReader(
@@ -31,7 +33,7 @@ pub fn main() !void {
         switch (block_header.metadata_block_type) {
             // streaminfo
             .streaminfo => {
-                const stream_info = try lib.metadata.block.getBlockFromReader(
+                stream_info = try lib.metadata.block.getBlockFromReader(
                     lib.metadata.block.StreamInfo,
                     file_reader.any(),
                 );
@@ -107,11 +109,17 @@ pub fn main() !void {
     std.debug.print("Metadata read\n", .{});
 
     metadata_arena.deinit();
+    var frame_arena = std.heap.ArenaAllocator.init(allocator);
 
-    std.debug.print("Reading frame 1\n", .{});
+    while (lib.frame.Frame.parseFrame(file_reader.any(), frame_arena.allocator(), stream_info) catch null) |x| {
+        std.debug.print("READ FRAME {}\n", .{x});
+    }
+    frame_arena.deinit();
 
-    const frame = try lib.frame.FrameHeader.parseFrameHeader(file_reader.any());
-    std.debug.print("PARSED FRAME: {}\n", .{frame});
+    // std.debug.print("Reading frame 1\n", .{});
+
+    // const frame = try lib.frame.FrameHeader.parseFrameHeader(file_reader.any());
+    // std.debug.print("PARSED FRAME: {}\n", .{frame});
 
     file.close();
     // file_reader.readStruct(comptime T: type)
