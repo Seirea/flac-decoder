@@ -1,4 +1,5 @@
 const std = @import("std");
+const rice = @import("../rice.zig");
 const StreamInfo = @import("../metadata/block.zig").StreamInfo;
 const crc8 = std.hash.crc.Crc(u8, .{
     .polynomial = 0x07,
@@ -254,7 +255,7 @@ pub const SubFrameHeader = union(enum) {
 pub const SubFrame = struct {
     header: SubFrameHeader,
     wasted_bits: u8,
-    subblock: []i32,
+    subblock: []const i32,
 
     pub fn parseSubframe(br: *std.io.BitReader(.big, std.io.AnyReader), alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo) !SubFrame {
         var subframe: SubFrame = undefined;
@@ -266,9 +267,9 @@ pub const SubFrame = struct {
             0 => .constant,
             1 => .verbatim,
             0b000010...0b000111 => return error.using_reserved_value,
-            0b001000...0b001100 => |x| SubFrameHeader{ .fixed_predictor = x - 8 },
+            0b001000...0b001100 => |x| SubFrameHeader{ .fixed_predictor = @truncate(x - 8) },
             0b001101...0b011111 => return error.using_reserved_value,
-            0b100000...0b111111 => |x| SubFrameHeader{ .linear_predictor = x - 31 },
+            0b100000...0b111111 => |x| SubFrameHeader{ .linear_predictor = @truncate(x - 31) },
         };
 
         subframe.wasted_bits = 0;
@@ -287,12 +288,14 @@ pub const SubFrame = struct {
 
         const real_bit_depth: u16 = (bit_depth - wasted) + offset_if_is_side_subframe;
 
+        // const verbatim_int_type = std.meta.Int(.signed, real_bit_depth);
+        const verbatim_int_type = i32;
         subframe.subblock = switch (subframe.header) {
-            .constant => [1]i32{try br.readBitsNoEof(i32, real_bit_depth)},
+            .constant => &[1]i32{(try br.readBitsNoEof(verbatim_int_type, real_bit_depth)) << @truncate(subframe.wasted_bits)},
             .verbatim => blk: {
                 var buf = try alloc.alloc(i32, frame.block_size);
                 for (0..buf.len) |i| {
-                    buf[i] = try br.readBitsNoEof(i32, real_bit_depth);
+                    buf[i] = (try br.readBitsNoEof(verbatim_int_type, real_bit_depth)) << @truncate(subframe.wasted_bits);
                 }
                 break :blk buf;
             },
@@ -301,8 +304,19 @@ pub const SubFrame = struct {
 
                 //read warmup samples
                 for (0..order) |i| {
-                    buf[i] = try br.readBitsNoEof(i32, real_bit_depth);
+                    buf[i] = try br.readBitsNoEof(verbatim_int_type, real_bit_depth);
                 }
+
+                std.debug.print("buf: {d}\n", .{buf});
+
+                // read parameter
+                const coded_residual = try rice.CodedResidual.readCodedResidual(br);
+
+                std.debug.print("coded residual: {}\n", .{coded_residual});
+                var p1 = try rice.Partition.readPartition(br, coded_residual);
+                std.debug.print("PARTITION: {}\n", .{p1});
+                const val = try p1.readNextResidual(br);
+                std.debug.print("READ: {}\n", .{val});
 
                 break :blk buf;
             },

@@ -1,0 +1,78 @@
+const std = @import("std");
+
+pub const ParameterSize = enum {
+    @"4-bits",
+    @"5-bits",
+};
+
+pub const CodedResidualParsingError = error{using_reserved_coding_method};
+
+pub const CodedResidual = struct {
+    // there will be 2 ^ (order) partitions in a coded residual
+    order: u4,
+
+    // the number of bits allocated to the Rice Parameter in each partition
+    parameter_size: ParameterSize,
+
+    pub fn readCodedResidual(br: *std.io.BitReader(.big, std.io.AnyReader)) !CodedResidual {
+        var out: CodedResidual = undefined;
+        const coding_method: u2 = try br.readBitsNoEof(u2, 2);
+        out.parameter_size = switch (coding_method) {
+            0b00 => .@"4-bits",
+            0b01 => .@"5-bits",
+            0b10...0b11 => {
+                return CodedResidualParsingError.using_reserved_coding_method;
+            },
+        };
+
+        out.order = try br.readBitsNoEof(u4, 4);
+
+        return out;
+    }
+};
+
+pub const Partition = struct {
+    escaped: bool,
+    parameter: u5,
+
+    pub fn readPartition(br: *std.io.BitReader(.big, std.io.AnyReader), residual: CodedResidual) !Partition {
+        std.debug.print("br_state: {b}\n", .{br.bits});
+        const param: u5 = switch (residual.parameter_size) {
+            .@"4-bits" => try br.readBitsNoEof(u5, 4),
+            .@"5-bits" => try br.readBitsNoEof(u5, 4),
+        };
+        std.debug.print("br_state: {b}\n", .{br.bits});
+
+        const escape = switch (residual.parameter_size) {
+            .@"4-bits" => param == 0b1111,
+            .@"5-bits" => param == 0b11111,
+        };
+
+        return .{
+            .parameter = param,
+            .escaped = escape,
+        };
+    }
+
+    pub fn readNextResidual(partition: Partition, br: *std.io.BitReader(.big, std.io.AnyReader)) !i32 {
+        if (partition.escaped) {
+            return try br.readBitsNoEof(
+                // std.meta.Int(.signed, partition.parameter),
+                i32,
+                partition.parameter,
+            );
+        } else {
+            // TODO: determine the correct quotient and remainder size
+            var quotient: u8 = 0;
+            while (try br.readBitsNoEof(u1, 1) == 0) : (quotient += 1) {}
+            const remainder = try br.readBitsNoEof(u32, partition.parameter);
+            const folded_residual = (quotient << @truncate(partition.parameter)) + remainder;
+            if (folded_residual % 2 == 0) {
+                return @bitCast(folded_residual >> 1);
+            } else {
+                return @bitCast(~(folded_residual >> 1));
+            }
+        }
+    }
+};
+//
