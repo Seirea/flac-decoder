@@ -251,20 +251,13 @@ pub const SubFrameHeader = union(enum) {
     linear_predictor: u5,
 };
 
-pub const Block = union(enum) {
-    constant: i32,
-    verbatim: []i32,
-    // TODO: Add more block types
-};
-
 pub const SubFrame = struct {
     header: SubFrameHeader,
     wasted_bits: u8,
-    block: Block,
+    subblock: []i32,
 
-    pub fn parseSubframe(reader: std.io.AnyReader, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo) !SubFrame {
+    pub fn parseSubframe(br: *std.io.BitReader(.big, std.io.AnyReader), alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo) !SubFrame {
         var subframe: SubFrame = undefined;
-        var br = std.io.bitReader(.big, reader);
 
         if (try br.readBitsNoEof(u1, 1) != 0) return error.missing_zero_bit;
 
@@ -286,16 +279,32 @@ pub const SubFrame = struct {
         }
 
         const bit_depth = try frame.bit_depth.asIntMinusOne(stream_info);
+        const offset_if_is_side_subframe: u1 = switch (frame.channel) {
+            .left_side, .side_right, .mid_side => 1,
+            else => 0,
+        };
         const wasted = subframe.wasted_bits;
 
-        subframe.block = switch (subframe.header) {
-            .constant => Block{ .constant = try br.readBitsNoEof(u32, bit_depth - wasted) },
+        const real_bit_depth: u16 = (bit_depth - wasted) + offset_if_is_side_subframe;
+
+        subframe.subblock = switch (subframe.header) {
+            .constant => [1]i32{try br.readBitsNoEof(i32, real_bit_depth)},
             .verbatim => blk: {
-                var buf = try alloc.alloc(u32, frame.block_size);
+                var buf = try alloc.alloc(i32, frame.block_size);
                 for (0..buf.len) |i| {
-                    buf[i] = try br.readBitsNoEof(u32, bit_depth - wasted);
+                    buf[i] = try br.readBitsNoEof(i32, real_bit_depth);
                 }
-                break :blk Block{ .verbatim = buf };
+                break :blk buf;
+            },
+            .fixed_predictor => |order| blk: {
+                var buf = try alloc.alloc(i32, frame.block_size);
+
+                //read warmup samples
+                for (0..order) |i| {
+                    buf[i] = try br.readBitsNoEof(i32, real_bit_depth);
+                }
+
+                break :blk buf;
             },
             // TODO: implement the rest
             else => @panic("TODO: impl others :)"),
