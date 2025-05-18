@@ -249,6 +249,8 @@ pub const SubFrameHeader = union(enum) {
     constant,
     verbatim,
     fixed_predictor: u3,
+
+    /// THE ACTUAL ORDER OF THE LINEAR PREDICTOR IS THIS VALUE + 1
     linear_predictor: u5,
 };
 
@@ -259,34 +261,39 @@ pub const SubFrame = struct {
 
     pub fn parseSubframe(br: *std.io.BitReader(.big, std.io.AnyReader), alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo) !SubFrame {
         var subframe: SubFrame = undefined;
+        std.debug.print("BR start: {}\n", .{br});
 
         if (try br.readBitsNoEof(u1, 1) != 0) return error.missing_zero_bit;
 
+        std.debug.print("BR 1: {}\n", .{br});
         const header = try br.readBitsNoEof(u6, 6);
         subframe.header = switch (header) {
             0 => .constant,
             1 => .verbatim,
             0b000010...0b000111 => return error.using_reserved_value,
-            0b001000...0b001100 => |x| SubFrameHeader{ .fixed_predictor = @truncate(x - 8) },
+            0b001000...0b001100 => |x| SubFrameHeader{ .fixed_predictor = @as(u3, @truncate(x)) },
             0b001101...0b011111 => return error.using_reserved_value,
-            0b100000...0b111111 => |x| SubFrameHeader{ .linear_predictor = @truncate(x - 31) },
+            0b100000...0b111111 => |x| SubFrameHeader{ .linear_predictor = @as(u5, @truncate(x)) },
         };
 
         subframe.wasted_bits = 0;
+
+        std.debug.print("BR count: {d}\n", .{br.count});
         if (try br.readBitsNoEof(u1, 1) == 1) {
             var num: u8 = 1;
             while (try br.readBitsNoEof(u1, 1) == 0) : (num += 1) {}
             subframe.wasted_bits = num;
         }
 
-        const bit_depth = try frame.bit_depth.asIntMinusOne(stream_info);
+        const bit_depth_minus_one = try frame.bit_depth.asIntMinusOne(stream_info);
         const offset_if_is_side_subframe: u1 = switch (frame.channel) {
             .left_side, .side_right, .mid_side => 1,
             else => 0,
         };
         const wasted = subframe.wasted_bits;
-
-        const real_bit_depth: u16 = (bit_depth - wasted) + offset_if_is_side_subframe;
+        std.debug.print("intercorrelation offset: {} | wasted bits: {}\n", .{ offset_if_is_side_subframe, wasted });
+        const real_bit_depth: u16 = (bit_depth_minus_one - wasted) + offset_if_is_side_subframe + 1;
+        std.debug.print("Real bit depth for subframe: {d}\n", .{real_bit_depth});
 
         // const verbatim_int_type = std.meta.Int(.signed, real_bit_depth);
         const verbatim_int_type = i32;
@@ -301,6 +308,7 @@ pub const SubFrame = struct {
             },
             .fixed_predictor => |order| blk: {
                 var buf = try alloc.alloc(i32, frame.block_size);
+                std.debug.print("BR: {}\n", .{br});
 
                 //read warmup samples
                 for (0..order) |i| {
@@ -404,4 +412,13 @@ test "check crc" {
         0x00,
         0x17,
     }));
+}
+
+test "truncation check" {
+    var cur: u6 = 0b001000;
+    var exp: u3 = 0;
+    while (cur <= 0b001100) : (cur += 1) {
+        try std.testing.expectEqual(exp, @as(u3, @truncate(cur)));
+        exp += 1;
+    }
 }

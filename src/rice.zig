@@ -39,7 +39,7 @@ pub const Partition = struct {
         std.debug.print("br_state: {b}\n", .{br.bits});
         const param: u5 = switch (residual.parameter_size) {
             .@"4-bits" => try br.readBitsNoEof(u5, 4),
-            .@"5-bits" => try br.readBitsNoEof(u5, 4),
+            .@"5-bits" => try br.readBitsNoEof(u5, 5),
         };
         std.debug.print("br_state: {b}\n", .{br.bits});
 
