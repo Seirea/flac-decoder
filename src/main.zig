@@ -114,8 +114,16 @@ pub fn main() !void {
     std.debug.print("PARSED FRAME: {}\n", .{frame});
 
     var br = std.io.bitReader(.big, file_reader.any());
-    const subframe = try lib.frame.SubFrame.parseSubframe(&br, metadata_arena.allocator(), frame, null);
-    std.debug.print("PARSED SUBFRAME: {}\n", .{subframe});
+    for (0..frame.channel.channelToNumberOfSubframesMinusOne() + 1) |i| {
+        std.debug.print("PARSED SUBFRAME {}: {}\n", .{ i, try lib.frame.SubFrame.parseSubframe(
+            &br,
+            metadata_arena.allocator(),
+            frame,
+            null,
+            @truncate(i),
+        ) });
+    }
+    br.alignToByte();
 
     file.close();
     // file_reader.readStruct(comptime T: type)

@@ -36,12 +36,10 @@ pub const Partition = struct {
     parameter: u5,
 
     pub fn readPartition(br: *std.io.BitReader(.big, std.io.AnyReader), residual: CodedResidual) !Partition {
-        std.debug.print("br_state: {b}\n", .{br.bits});
         const param: u5 = switch (residual.parameter_size) {
             .@"4-bits" => try br.readBitsNoEof(u5, 4),
             .@"5-bits" => try br.readBitsNoEof(u5, 5),
         };
-        std.debug.print("br_state: {b}\n", .{br.bits});
 
         const escape = switch (residual.parameter_size) {
             .@"4-bits" => param == 0b1111,
@@ -66,7 +64,8 @@ pub const Partition = struct {
             var quotient: u8 = 0;
             while (try br.readBitsNoEof(u1, 1) == 0) : (quotient += 1) {}
             const remainder = try br.readBitsNoEof(u32, partition.parameter);
-            const folded_residual = (quotient << @truncate(partition.parameter)) + remainder;
+            const folded_residual: u32 = (@as(u32, quotient) << partition.parameter) | remainder;
+            // std.debug.print("quo: {}, rem: {} => Folded: {}\n", .{ quotient, remainder, folded_residual });
             if (folded_residual % 2 == 0) {
                 return @bitCast(folded_residual >> 1);
             } else {
