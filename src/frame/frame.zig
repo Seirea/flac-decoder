@@ -384,7 +384,7 @@ pub fn decodeNumber(reader: anytype) !u36 {
     const first = try reader.readInt(u8, .big);
 
     var N: u3 = undefined;
-    if (first & 0b1000_000 == 0) {
+    if (first & 0b1000_0000 == 0) {
         // number with only one byte
         return first & 0b0111_1111;
     }
