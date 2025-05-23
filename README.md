@@ -11,3 +11,16 @@ Implemented:
     - [x] Vorbis comment
     - [x] Cuesheet
     - [x] Picture
+- [x] Audio Frames
+    - [x] Frame Header
+        - [x] CRC Checked
+    - [x] Subframe
+        - [x] Constant 
+        - [x] Verbatim
+        - [x] Fixed Predictor
+        - [ ] Linear Predictor
+    - [x] Frame Footer
+        - [ ] CRC Checked
+- [ ] Interchannel Decorrelation
+- [ ] MD5 Sum
+- [ ] Multithreading
