@@ -147,7 +147,10 @@ pub fn main() !void {
 
     // var frame_arena = std.heap.ArenaAllocator.init(allocator);
 
-    while (lib.frame.Frame.parseFrame(file_reader.any(), allocator, streaminfo_saved) catch null) |x| {
+    while (lib.frame.Frame.parseFrame(file_reader.any(), allocator, streaminfo_saved) catch |err| switch (err) {
+        error.EndOfStream => null,
+        else => |er| return er,
+    }) |x| {
         for (0..x.header.block_size) |sample| {
             for (x.sub_frames) |subframe| {
                 try stdout.writeInt(
