@@ -296,9 +296,8 @@ pub const SubFrame = struct {
         // std.debug.print("BR 3: {}, {}\n", .{ br, br.reader.context });
         const bit_depth_minus_one = try frame.bit_depth.asIntMinusOne(stream_info);
         const offset_if_is_side_subframe: u1 = switch (frame.channel) {
-            .left_side => if (channel_num == 1) 1 else 0,
+            .left_side, .mid_side => if (channel_num == 1) 1 else 0,
             .side_right => if (channel_num == 0) 1 else 0,
-            .mid_side => if (channel_num == 1) 1 else 0,
             else => 0,
         };
         const wasted = subframe.wasted_bits;
