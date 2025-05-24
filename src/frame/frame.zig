@@ -1,4 +1,6 @@
 const std = @import("std");
+const rice = @import("../rice.zig");
+const util = @import("../util.zig");
 const StreamInfo = @import("../metadata/block.zig").StreamInfo;
 const crc8 = std.hash.crc.Crc(u8, .{
     .polynomial = 0x07,
@@ -7,7 +9,14 @@ const crc8 = std.hash.crc.Crc(u8, .{
     .reflect_output = false,
     .xor_output = 0x0,
 });
-const crc16 = std.hash.crc.Crc16Modbus;
+
+const crc16 = std.hash.crc.Crc(u16, .{
+    .polynomial = 0x8005,
+    .initial = 0,
+    .reflect_input = false,
+    .reflect_output = false,
+    .xor_output = 0x0,
+});
 
 const FrameParsingError = error{
     incorrect_frame_sync,
@@ -15,7 +24,10 @@ const FrameParsingError = error{
     forbidden_sample_rate,
     using_reserved_value,
     stream_info_does_not_exist,
-    crc_mismatch,
+    crc_frame_header_mismatch,
+    crc_frame_footer_mismatch,
+    forbidden_fixed_predictor_order,
+    negative_lpc_shift,
 };
 
 pub const ParsingBlockSize = enum(u4) {
@@ -58,21 +70,22 @@ pub const ParsingSampleRate = enum(u4) {
 };
 
 pub const Channel = enum(u4) {
-    mono = 0,
-    stereo,
-    three,
-    four,
-    five,
-    six,
-    seven,
-    eight,
-    left_side,
-    side_right,
-    mid_side,
-    pub fn asNum(self: Channel) u4 {
-        return switch (self) {
-            .left_side, .side_right, .mid_side => 2,
-            else => @intFromEnum(self) + 1,
+    mono = 0b0000,
+    stereo = 0b0001,
+    three = 0b0010,
+    four = 0b0011,
+    five = 0b0100,
+    six = 0b0101,
+    seven = 0b0110,
+    eight = 0b0111,
+    left_side = 0b1000,
+    side_right = 0b1001,
+    mid_side = 0b1010,
+
+    pub fn channelToNumberOfSubframesMinusOne(chan: Channel) u3 {
+        return switch (chan) {
+            .left_side, .side_right, .mid_side => 1,
+            else => @truncate(@intFromEnum(chan)),
         };
     }
 };
@@ -110,8 +123,10 @@ pub const BitDepth = enum(u3) {
 
 pub const Frame = struct {
     header: FrameHeader,
+    _sub_frames: [8]SubFrame,
     sub_frames: []SubFrame,
     footer: u16,
+
     pub fn parseFrame(reader: std.io.AnyReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
         var frame: Frame = undefined;
 
@@ -121,20 +136,30 @@ pub const Frame = struct {
         var crc_reader = ReaderToCRCWriter(crc16).init(reader, &bw);
 
         frame.header = try FrameHeader.parseFrameHeader(crc_reader.any());
-        var sub_frames: [8]?SubFrame = @splat(null);
-        const sub_count = frame.header.channel.asNum();
+        const sub_count: u4 = frame.header.channel.channelToNumberOfSubframesMinusOne() + 1;
 
-        for (0..sub_count) |n| {
-            sub_frames[n] = try SubFrame.parseSubframe(crc_reader, alloc, frame.header, stream_info);
+        for (0..sub_count) |channel_id| {
+            frame._sub_frames[channel_id] = try SubFrame.parseSubframe(
+                &crc_reader,
+                alloc,
+                frame.header,
+                stream_info,
+                @intCast(channel_id),
+            );
         }
-        frame.sub_frames = @as([8]SubFrame, sub_frames)[0..sub_count];
-        // TODO: align to byte?
+        frame.sub_frames = frame._sub_frames[0..sub_count];
+
+        crc_reader.br.alignToByte();
+
+        // read crc
         frame.footer = try reader.readInt(u16, .big);
         try crc_reader.bw.flushBits();
 
-        // CRC Check (return error if failed)
-        if (hasher.final() != frame.footer) {
-            return error.crc_mismatch;
+        const fin = hasher.final();
+        // std.debug.print("footer: {} | fin: {}\n", .{ frame.footer, fin });
+        // CRC16 Check (return error if failed)
+        if (fin != frame.footer) {
+            return error.crc_frame_footer_mismatch;
         }
 
         return frame;
@@ -157,7 +182,9 @@ pub fn CrcWriter(comptime T: type) type {
         pub fn writeByte(self: *CrcWriter(T), bits: u8) !void {
             const out = [1]u8{bits};
             self.crc_obj.update(&out);
-            // std.debug.print("wrote: {X}\n", .{out});
+
+            // NOTE FROM STANLEY: KEEP THIS IN IT IS VERY USEFUL
+            // std.debug.print("wrote: {X} to {}\n", .{ out, self });
         }
     };
 }
@@ -168,13 +195,15 @@ pub fn ReaderToCRCWriter(comptime T: type) type {
         br: std.io.BitReader(.big, std.io.AnyReader),
         bw: *std.io.BitWriter(.big, CrcWriter(T)),
 
-        fn init(reader: std.io.AnyReader, bw: *std.io.BitWriter(.big, CrcWriter(T))) ReaderToCRCWriter(T) {
+        pub fn init(reader: std.io.AnyReader, bw: *std.io.BitWriter(.big, CrcWriter(T))) ReaderToCRCWriter(T) {
+            const br = std.io.bitReader(.big, reader);
             return .{
                 .reader = reader,
-                .br = std.io.bitReader(.big, reader),
+                .br = br,
                 .bw = bw,
             };
         }
+
         pub fn any(self: @This()) std.io.AnyReader {
             return .{ .context = @ptrCast(&self), .readFn = typeErasedReadFn };
         }
@@ -189,20 +218,20 @@ pub fn ReaderToCRCWriter(comptime T: type) type {
         pub fn readByte(self: *ReaderToCRCWriter(T)) !u8 {
             return self.any().readByte();
         }
-        fn typeErasedReadFn(context: *const anyopaque, buffer: []u8) anyerror!usize {
+        pub fn typeErasedReadFn(context: *const anyopaque, buffer: []u8) anyerror!usize {
             const ptr: *ReaderToCRCWriter(T) = @alignCast(@ptrCast(@constCast(context)));
             return read(ptr, buffer);
         }
 
         // fn readBitsNoEof
-        fn readBitsNoEof(self: *ReaderToCRCWriter(T), comptime I: type, num: u16) !I {
+        pub fn readBitsNoEof(self: *ReaderToCRCWriter(T), comptime I: type, num: u16) !I {
             const readed = try self.br.readBitsNoEof(I, num);
             try self.bw.writeBits(readed, num);
 
             return readed;
         }
 
-        fn readInt(self: *ReaderToCRCWriter(T), comptime I: type, endian: std.builtin.Endian) !I {
+        pub fn readInt(self: *ReaderToCRCWriter(T), comptime I: type, endian: std.builtin.Endian) !I {
             const readed = try self.reader.readInt(I, endian);
             try self.bw.writeBits(readed, @bitSizeOf(I));
 
@@ -249,8 +278,8 @@ pub const FrameHeader = struct {
         frame_header.coded_number = try decodeNumber(&crc_reader);
 
         frame_header.block_size = switch (bs) {
-            .uncommon_8bit => try crc_reader.readInt(u8, .big),
-            .uncommon_16bit => try crc_reader.readInt(u16, .big),
+            .uncommon_8bit => (try crc_reader.readInt(u8, .big)) + 1,
+            .uncommon_16bit => (try crc_reader.readInt(u16, .big)) + 1,
             .@"192" => 192,
             .@"576" => 576,
             .@"1152" => 1152,
@@ -293,7 +322,7 @@ pub const FrameHeader = struct {
 
         // CRC Check (return error if failed)
         if (hasher.final() != frame_header.crc) {
-            return error.crc_mismatch;
+            return error.crc_frame_header_mismatch;
         }
 
         return frame_header;
@@ -304,58 +333,182 @@ pub const SubFrameHeader = union(enum) {
     constant,
     verbatim,
     fixed_predictor: u3,
-    linear_predictor: u5,
-};
 
-pub const Block = union(enum) {
-    constant: i32,
-    verbatim: []i32,
-    // TODO: Add more block types
+    /// THE ACTUAL ORDER OF THE LINEAR PREDICTOR IS THIS VALUE + 1
+    linear_predictor_minus_one: u5,
 };
 
 pub const SubFrame = struct {
     header: SubFrameHeader,
-    wasted_bits: u8,
-    block: Block,
+    wasted_bits: u5,
+    subblock: []const i64,
 
-    pub fn parseSubframe(reader: anytype, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo) !SubFrame {
+    pub fn parseSubframe(br: anytype, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
         var subframe: SubFrame = undefined;
-        var br = std.io.bitReader(.big, reader);
+        // std.debug.print("BR start: {}\n", .{br});
 
         if (try br.readBitsNoEof(u1, 1) != 0) return error.missing_zero_bit;
 
+        // std.debug.print("BR 1: {}\n", .{br});
         const header = try br.readBitsNoEof(u6, 6);
+        // std.debug.print("BR 2: {}\n", .{br});
         subframe.header = switch (header) {
             0 => .constant,
             1 => .verbatim,
             0b000010...0b000111 => return error.using_reserved_value,
-            0b001000...0b001100 => |x| SubFrameHeader{ .fixed_predictor = @intCast(x - 8) },
+            0b001000...0b001100 => |x| SubFrameHeader{ .fixed_predictor = @as(u3, @truncate(x)) },
             0b001101...0b011111 => return error.using_reserved_value,
-            0b100000...0b111111 => |x| SubFrameHeader{ .linear_predictor = @intCast(x - 31) },
+            0b100000...0b111111 => |x| SubFrameHeader{ .linear_predictor_minus_one = @as(u5, @truncate(x)) },
         };
 
         subframe.wasted_bits = 0;
+
         if (try br.readBitsNoEof(u1, 1) == 1) {
-            var num: u8 = 1;
+            var num: u5 = 1;
             while (try br.readBitsNoEof(u1, 1) == 0) : (num += 1) {}
             subframe.wasted_bits = num;
         }
 
-        const bit_depth = try frame.bit_depth.asIntMinusOne(stream_info);
-        const wasted = subframe.wasted_bits;
-
-        subframe.block = switch (subframe.header) {
-            .constant => Block{ .constant = try br.readBitsNoEof(i32, bit_depth - wasted) },
-            .verbatim => blk: {
-                var buf = try alloc.alloc(i32, frame.block_size);
-                for (0..buf.len) |i| {
-                    buf[i] = try br.readBitsNoEof(i32, bit_depth - wasted);
-                }
-                break :blk Block{ .verbatim = buf };
-            },
-            // TODO: implement the rest
-            else => @panic("TODO: impl others :)"),
+        // std.debug.print("BR 3: {}, {}\n", .{ br, br.reader.context });
+        const bit_depth_minus_one = try frame.bit_depth.asIntMinusOne(stream_info);
+        const offset_if_is_side_subframe: u1 = switch (frame.channel) {
+            .left_side, .mid_side => if (channel_num == 1) 1 else 0,
+            .side_right => if (channel_num == 0) 1 else 0,
+            else => 0,
         };
+        const wasted = subframe.wasted_bits;
+        // std.debug.print("intercorrelation offset: {} | wasted bits: {}\n", .{ offset_if_is_side_subframe, wasted });
+        const real_bit_depth: u16 = (bit_depth_minus_one - wasted) + offset_if_is_side_subframe + 1;
+        // std.debug.print("Real bit depth for subframe: {d}\n", .{real_bit_depth});
+
+        // const verbatim_int_type = std.meta.Int(.signed, real_bit_depth);
+        const verbatim_int_type = i64;
+        subframe.subblock = switch (subframe.header) {
+            .constant => &[1]verbatim_int_type{(try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth)) << subframe.wasted_bits},
+            .verbatim => blk: {
+                var buf = try alloc.alloc(verbatim_int_type, frame.block_size);
+                for (0..buf.len) |i| {
+                    // i(var)
+
+                    buf[i] = (try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth)) << subframe.wasted_bits;
+                }
+                break :blk buf;
+            },
+            .fixed_predictor => |order| blk: {
+                var buf = try alloc.alloc(verbatim_int_type, frame.block_size);
+
+                //read warmup samples
+                for (0..order) |i| {
+                    buf[i] = try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth);
+                }
+                // std.debug.print("buf after warmup: {d}\n", .{buf});
+
+                const coded_residual = try rice.CodedResidual.readCodedResidual(br);
+                // std.debug.print("coded residual: {}\n", .{coded_residual});
+                const number_of_samples_in_each_partition = frame.block_size >> coded_residual.order;
+                var current_partition = try rice.Partition.readPartition(br, coded_residual);
+
+                // std.debug.print("PARTITION: {}\n", .{p1});
+
+                switch (order) {
+                    0 => {
+                        // read remaining samples
+                        for (order..buf.len) |i| {
+                            if (i % number_of_samples_in_each_partition == 0) {
+                                current_partition = try rice.Partition.readPartition(br, coded_residual);
+                            }
+                            buf[i] = try current_partition.readNextResidual(br);
+                        }
+                    },
+                    1 => {
+                        // read remaining samples
+                        for (order..buf.len) |i| {
+                            if (i % number_of_samples_in_each_partition == 0) {
+                                current_partition = try rice.Partition.readPartition(br, coded_residual);
+                            }
+                            buf[i] = buf[i - 1] + try current_partition.readNextResidual(br);
+                        }
+                    },
+                    2 => {
+                        // read remaining samples
+                        for (order..buf.len) |i| {
+                            if (i % number_of_samples_in_each_partition == 0) {
+                                current_partition = try rice.Partition.readPartition(br, coded_residual);
+                            }
+                            buf[i] = 2 * buf[i - 1] - buf[i - 2] + try current_partition.readNextResidual(br);
+                        }
+                    },
+                    3 => {
+                        // read remaining samples
+                        for (order..buf.len) |i| {
+                            if (i % number_of_samples_in_each_partition == 0) {
+                                current_partition = try rice.Partition.readPartition(br, coded_residual);
+                            }
+                            buf[i] = 3 * buf[i - 1] - 3 * buf[i - 2] + buf[i - 3] + try current_partition.readNextResidual(br);
+                        }
+                    },
+                    4 => {
+                        // read remaining samples
+                        for (order..buf.len) |i| {
+                            if (i % number_of_samples_in_each_partition == 0) {
+                                current_partition = try rice.Partition.readPartition(br, coded_residual);
+                            }
+                            buf[i] = 4 * buf[i - 1] - 6 * buf[i - 2] + 4 * buf[i - 3] - buf[i - 4] + try current_partition.readNextResidual(br);
+                        }
+                    },
+                    else => {
+                        return error.forbidden_fixed_predictor_order;
+                    },
+                }
+
+                // std.debug.print("buf: {d}\n", .{buf});
+
+                break :blk buf;
+            },
+            .linear_predictor_minus_one => |order_minus_one| blk: {
+                const order: u6 = order_minus_one + 1;
+
+                var buf = try alloc.alloc(verbatim_int_type, frame.block_size);
+                for (0..order) |i| {
+                    buf[i] = try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth);
+                }
+
+                const coefficient_precision: u4 = try br.readBitsNoEof(u4, 4) + 1;
+
+                // TODO: Add a safe mode to the library so that this check can be turned off if needed
+                // Defined under https://www.rfc-editor.org/rfc/rfc9639.html#appendix-B.4-1 to never be negative.
+                const prediction_right_shift: i5 = try br.readBitsNoEof(i5, 5);
+                if (prediction_right_shift < 0) {
+                    return error.negative_lpc_shift;
+                }
+
+                var coefficients = try alloc.alloc(i16, order);
+                for (0..order) |i| {
+                    coefficients[i] = try util.readTwosComplementIntegerOfSetBits(br, i16, coefficient_precision);
+                }
+
+                const coded_residual = try rice.CodedResidual.readCodedResidual(br);
+                const number_of_samples_in_each_partition = frame.block_size >> coded_residual.order;
+
+                var current_partition = try rice.Partition.readPartition(br, coded_residual);
+
+                for (order..buf.len) |i| {
+                    if (i % number_of_samples_in_each_partition == 0) {
+                        current_partition = try rice.Partition.readPartition(br, coded_residual);
+                    }
+                    var predicted: i64 = 0;
+                    for (0..order) |x| {
+                        predicted += @as(verbatim_int_type, @intCast(coefficients[x])) * buf[i - x - 1];
+                    }
+
+                    buf[i] = (predicted >> @intCast(prediction_right_shift)) + try current_partition.readNextResidual(br);
+                }
+
+                break :blk buf;
+            },
+        };
+
+        // std.debug.print("Created: {d}\n", .{subframe.subblock});
 
         return subframe;
     }
@@ -366,7 +519,7 @@ pub fn decodeNumber(reader: anytype) !u36 {
     const first = try reader.readInt(u8, .big);
 
     var N: u3 = undefined;
-    if (first & 0b1000_000 == 0) {
+    if (first & 0b1000_0000 == 0) {
         // number with only one byte
         return first & 0b0111_1111;
     }
@@ -437,4 +590,13 @@ test "check crc" {
         0x00,
         0x17,
     }));
+}
+
+test "truncation check" {
+    var cur: u6 = 0b001000;
+    var exp: u3 = 0;
+    while (cur <= 0b001100) : (cur += 1) {
+        try std.testing.expectEqual(exp, @as(u3, @truncate(cur)));
+        exp += 1;
+    }
 }
