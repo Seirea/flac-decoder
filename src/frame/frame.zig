@@ -204,8 +204,11 @@ pub fn ReaderToCRCWriter(comptime T: type) type {
             };
         }
 
-        pub fn any(self: @This()) std.io.AnyReader {
-            return .{ .context = @ptrCast(&self), .readFn = typeErasedReadFn };
+        pub fn any(self: *ReaderToCRCWriter(T)) std.io.AnyReader {
+            return .{
+                .context = self,
+                .readFn = typeErasedReadFn,
+            };
         }
 
         pub fn read(self: *ReaderToCRCWriter(T), buffer: []u8) !usize {
@@ -219,7 +222,7 @@ pub fn ReaderToCRCWriter(comptime T: type) type {
             return self.any().readByte();
         }
         pub fn typeErasedReadFn(context: *const anyopaque, buffer: []u8) anyerror!usize {
-            const ptr: *ReaderToCRCWriter(T) = @alignCast(@ptrCast(@constCast(context)));
+            const ptr: *ReaderToCRCWriter(T) = @constCast(@ptrCast(@alignCast(context)));
             return read(ptr, buffer);
         }
 
