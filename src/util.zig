@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn shortenIntToTwosComplementIntOfSetBits(comptime T: type, val: T, bit_size: u16) T {
     const uppermost: T = @as(T, 1) << @intCast(bit_size - 1);
-    return -(val & uppermost) + (val & (uppermost - 1));
+    return (val & (uppermost - 1)) - (val & uppermost);
 }
 
 pub fn readTwosComplementIntegerOfSetBits(br: *std.io.BitReader(.big, std.io.AnyReader), comptime T: type, bit_count: u16) !T {

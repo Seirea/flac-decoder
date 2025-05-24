@@ -8,8 +8,9 @@ pub const Signature = extern struct {
 const allocator = std.heap.smp_allocator;
 
 pub fn main() !void {
-    const file = try std.fs.cwd().openFile("test/example_3.flac", .{});
-    const file_reader = file.reader();
+    const file = try std.fs.cwd().openFile("test/06 Honey Bee.flac", .{});
+    var breader = std.io.bufferedReader(file.reader());
+    const file_reader = breader.reader();
 
     const sig: Signature = try file_reader.readStruct(Signature);
     std.debug.print("{s}\n", sig);
@@ -19,7 +20,7 @@ pub fn main() !void {
     }
 
     var metadata_arena = std.heap.ArenaAllocator.init(allocator);
-
+    var streaminfo_saved: ?lib.metadata.block.StreamInfo = null;
     // read metadata
     while (true) {
         const block_header = try lib.metadata.block.getBlockFromReader(
@@ -35,6 +36,7 @@ pub fn main() !void {
                     lib.metadata.block.StreamInfo,
                     file_reader.any(),
                 );
+                streaminfo_saved = stream_info;
 
                 std.debug.print("StreamInfo Block: {}\n", .{stream_info});
             },
@@ -108,23 +110,83 @@ pub fn main() !void {
 
     metadata_arena.deinit();
 
-    std.debug.print("Reading frame 1\n", .{});
+    const out_wav = try std.fs.cwd().createFile("out.wav", .{});
+    var bw = std.io.bufferedWriter(out_wav.writer());
+    const stdout = bw.writer();
 
-    const frame = try lib.frame.FrameHeader.parseFrameHeader(file_reader.any());
-    std.debug.print("PARSED FRAME: {}\n", .{frame});
+    const bit_depth = streaminfo_saved.?.bits_per_sample_minus_one + 1;
 
-    var br = std.io.bitReader(.big, file_reader.any());
-    for (0..frame.channel.channelToNumberOfSubframesMinusOne() + 1) |i| {
-        std.debug.print("PARSED SUBFRAME {}: {}\n", .{ i, try lib.frame.SubFrame.parseSubframe(
-            &br,
-            metadata_arena.allocator(),
-            frame,
-            null,
-            @truncate(i),
-        ) });
+    const nchannels = streaminfo_saved.?.number_of_channels_minus_one + 1;
+    const num_of_samples: u32 = @intCast(streaminfo_saved.?.number_of_interchannel_samples);
+    const samplerate = streaminfo_saved.?.sample_rate;
+    // const duration = num_of_samples / samplerate;
+
+    const sampleType = switch (bit_depth) {
+        16 => i16,
+        else => @panic("unknown bit depth"),
+    };
+
+    try stdout.writeAll("RIFF");
+    const header_size = 36;
+    try stdout.writeInt(
+        u32,
+        header_size + num_of_samples * nchannels * (bit_depth / 8),
+        std.builtin.Endian.little,
+    );
+    try stdout.writeAll("WAVE");
+
+    try stdout.writeAll("fmt ");
+    try stdout.writeInt(u32, 16, std.builtin.Endian.little);
+    try stdout.writeInt(u16, 1, std.builtin.Endian.little);
+    try stdout.writeInt(u16, nchannels, std.builtin.Endian.little);
+    try stdout.writeInt(u32, samplerate, std.builtin.Endian.little);
+    const blockAlign = nchannels * (bit_depth / 8);
+    try stdout.writeInt(u32, blockAlign * samplerate, std.builtin.Endian.little);
+    try stdout.writeInt(u16, blockAlign, std.builtin.Endian.little);
+    try stdout.writeInt(u16, bit_depth, std.builtin.Endian.little);
+    try stdout.writeAll("data");
+    try stdout.writeInt(
+        u32,
+        num_of_samples * nchannels * (bit_depth / 8),
+        std.builtin.Endian.little,
+    );
+
+    // write audio
+    var read_samples: usize = 0;
+    while (read_samples < num_of_samples) {
+        const frame = try lib.frame.FrameHeader.parseFrameHeader(file_reader.any());
+        // std.debug.print("PARSED FRAME: {}\n", .{frame});
+
+        var br = std.io.bitReader(.big, file_reader.any());
+        for (0..frame.channel.channelToNumberOfSubframesMinusOne() + 1) |i| {
+            const subframe = try lib.frame.SubFrame.parseSubframe(
+                &br,
+                allocator,
+                frame,
+                null,
+                @truncate(i),
+            );
+            // std.debug.print("Subframe: {}\n", .{subframe});
+            if (i == 0) {
+                read_samples += subframe.subblock.len;
+            }
+            for (subframe.subblock) |sample| {
+                try stdout.writeInt(
+                    sampleType,
+                    @truncate(sample),
+
+                    std.builtin.Endian.little,
+                );
+            }
+        }
+        br.alignToByte();
+
+        // FIXME: this must be added to the library
+        _ = try file_reader.readInt(u16, .big);
+        // std.debug.print("Frame CRC16: {}\n", .{crc});
     }
-    br.alignToByte();
+
+    try bw.flush();
 
     file.close();
-    // file_reader.readStruct(comptime T: type)
 }

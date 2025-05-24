@@ -408,9 +408,9 @@ pub const SubFrame = struct {
                     return error.negative_lpc_shift;
                 }
 
-                var coefficients = try alloc.alloc(i15, order);
+                var coefficients = try alloc.alloc(i16, order);
                 for (0..order) |i| {
-                    coefficients[i] = try util.readTwosComplementIntegerOfSetBits(br, i15, coefficient_precision);
+                    coefficients[i] = try util.readTwosComplementIntegerOfSetBits(br, i16, coefficient_precision);
                 }
 
                 const coded_residual = try rice.CodedResidual.readCodedResidual(br);

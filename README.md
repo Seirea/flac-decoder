@@ -18,7 +18,7 @@ Implemented:
         - [x] Constant 
         - [x] Verbatim
         - [x] Fixed Predictor
-        - [ ] Linear Predictor
+        - [x] Linear Predictor
     - [x] Frame Footer
         - [ ] CRC Checked
 - [ ] Interchannel Decorrelation
