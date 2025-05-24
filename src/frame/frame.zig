@@ -123,7 +123,6 @@ pub const BitDepth = enum(u3) {
 
 pub const Frame = struct {
     header: FrameHeader,
-    _sub_frames: [8]SubFrame,
     sub_frames: []SubFrame,
     footer: u16,
 
@@ -138,8 +137,9 @@ pub const Frame = struct {
         frame.header = try FrameHeader.parseFrameHeader(crc_reader.any());
         const sub_count: u4 = frame.header.channel.channelToNumberOfSubframesMinusOne() + 1;
 
+        frame.sub_frames = try alloc.alloc(SubFrame, sub_count);
         for (0..sub_count) |channel_id| {
-            frame._sub_frames[channel_id] = try SubFrame.parseSubframe(
+            frame.sub_frames[channel_id] = try SubFrame.parseSubframe(
                 &crc_reader,
                 alloc,
                 frame.header,
@@ -147,7 +147,6 @@ pub const Frame = struct {
                 @intCast(channel_id),
             );
         }
-        frame.sub_frames = frame._sub_frames[0..sub_count];
 
         crc_reader.br.alignToByte();
 
@@ -184,7 +183,7 @@ pub fn CrcWriter(comptime T: type) type {
             self.crc_obj.update(&out);
 
             // NOTE FROM STANLEY: KEEP THIS IN IT IS VERY USEFUL
-            // std.debug.print("wrote: {X} to {}\n", .{ out, self });
+            // std.debug.print("wrote: {X} to \n{}\n", .{ out, self });
         }
     };
 }
