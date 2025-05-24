@@ -20,7 +20,7 @@ Implemented:
         - [x] Fixed Predictor
         - [x] Linear Predictor
     - [x] Frame Footer
-        - [ ] CRC Checked
+        - [x] CRC Checked
 - [ ] Interchannel Decorrelation
 - [ ] MD5 Sum
 - [ ] Multithreading

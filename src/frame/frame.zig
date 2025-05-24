@@ -10,13 +10,22 @@ const crc8 = std.hash.crc.Crc(u8, .{
     .xor_output = 0x0,
 });
 
+const crc16 = std.hash.crc.Crc(u16, .{
+    .polynomial = 0x8005,
+    .initial = 0,
+    .reflect_input = false,
+    .reflect_output = false,
+    .xor_output = 0x0,
+});
+
 const FrameParsingError = error{
     incorrect_frame_sync,
     missing_zero_bit, // subframe
     forbidden_sample_rate,
     using_reserved_value,
     stream_info_does_not_exist,
-    crc_mismatch,
+    crc_frame_header_mismatch,
+    crc_frame_footer_mismatch,
     forbidden_fixed_predictor_order,
     negative_lpc_shift,
 };
@@ -114,7 +123,50 @@ pub const BitDepth = enum(u3) {
 
 pub const Frame = struct {
     header: FrameHeader,
+    _sub_frames: [8]SubFrame,
     sub_frames: []SubFrame,
+    footer: u16,
+
+    pub fn parseFrame(reader: std.io.AnyReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
+        var frame: Frame = undefined;
+
+        var hasher = crc16.init();
+        const crc_writer = CrcWriter(crc16){ .crc_obj = &hasher };
+        var bw = std.io.bitWriter(.big, crc_writer);
+        var crc_reader = ReaderToCRCWriter(crc16).init(reader, &bw);
+
+        frame.header = try FrameHeader.parseFrameHeader(crc_reader.any());
+        const sub_count: u4 = frame.header.channel.channelToNumberOfSubframesMinusOne() + 1;
+
+        for (0..sub_count) |channel_id| {
+            frame._sub_frames[channel_id] = try SubFrame.parseSubframe(
+                &crc_reader,
+                alloc,
+                frame.header,
+                stream_info,
+                @intCast(channel_id),
+            );
+        }
+        frame.sub_frames = frame._sub_frames[0..sub_count];
+
+        crc_reader.br.alignToByte();
+
+        // read crc
+        frame.footer = try reader.readInt(u16, .big);
+        try crc_reader.bw.flushBits();
+
+        const fin = hasher.final();
+        // std.debug.print("footer: {} | fin: {}\n", .{ frame.footer, fin });
+        // CRC16 Check (return error if failed)
+        if (fin != frame.footer) {
+            return error.crc_frame_footer_mismatch;
+        }
+
+        return frame;
+    }
+    pub fn calculateSamples(_: Frame) []i32 {
+        @panic("TODO");
+    }
 };
 
 pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: anytype) !Enum {
@@ -130,7 +182,9 @@ pub fn CrcWriter(comptime T: type) type {
         pub fn writeByte(self: *CrcWriter(T), bits: u8) !void {
             const out = [1]u8{bits};
             self.crc_obj.update(&out);
-            // std.debug.print("wrote: {X}\n", .{out});
+
+            // NOTE FROM STANLEY: KEEP THIS IN IT IS VERY USEFUL
+            // std.debug.print("wrote: {X} to {}\n", .{ out, self });
         }
     };
 }
@@ -141,27 +195,47 @@ pub fn ReaderToCRCWriter(comptime T: type) type {
         br: std.io.BitReader(.big, std.io.AnyReader),
         bw: *std.io.BitWriter(.big, CrcWriter(T)),
 
-        fn init(reader: std.io.AnyReader, bw: *std.io.BitWriter(.big, CrcWriter(T))) ReaderToCRCWriter(T) {
+        pub fn init(reader: std.io.AnyReader, bw: *std.io.BitWriter(.big, CrcWriter(T))) ReaderToCRCWriter(T) {
+            const br = std.io.bitReader(.big, reader);
             return .{
                 .reader = reader,
-                .br = std.io.bitReader(.big, reader),
+                .br = br,
                 .bw = bw,
             };
         }
 
-        // fn readBitsNoEof
-        fn readBitsNoEof(self: *ReaderToCRCWriter(T), comptime I: type, num: u16) !I {
-            const read = try self.br.readBitsNoEof(I, num);
-            try self.bw.writeBits(read, num);
-
-            return read;
+        pub fn any(self: @This()) std.io.AnyReader {
+            return .{ .context = @ptrCast(&self), .readFn = typeErasedReadFn };
         }
 
-        fn readInt(self: *ReaderToCRCWriter(T), comptime I: type, endian: std.builtin.Endian) !I {
-            const read = try self.reader.readInt(I, endian);
-            try self.bw.writeBits(read, @bitSizeOf(I));
+        pub fn read(self: *ReaderToCRCWriter(T), buffer: []u8) !usize {
+            const res = try self.reader.read(buffer);
+            for (buffer[0..res]) |byte| {
+                try self.bw.writeBits(byte, 8);
+            }
+            return res;
+        }
+        pub fn readByte(self: *ReaderToCRCWriter(T)) !u8 {
+            return self.any().readByte();
+        }
+        pub fn typeErasedReadFn(context: *const anyopaque, buffer: []u8) anyerror!usize {
+            const ptr: *ReaderToCRCWriter(T) = @alignCast(@ptrCast(@constCast(context)));
+            return read(ptr, buffer);
+        }
 
-            return read;
+        // fn readBitsNoEof
+        pub fn readBitsNoEof(self: *ReaderToCRCWriter(T), comptime I: type, num: u16) !I {
+            const readed = try self.br.readBitsNoEof(I, num);
+            try self.bw.writeBits(readed, num);
+
+            return readed;
+        }
+
+        pub fn readInt(self: *ReaderToCRCWriter(T), comptime I: type, endian: std.builtin.Endian) !I {
+            const readed = try self.reader.readInt(I, endian);
+            try self.bw.writeBits(readed, @bitSizeOf(I));
+
+            return readed;
         }
     };
 }
@@ -248,7 +322,7 @@ pub const FrameHeader = struct {
 
         // CRC Check (return error if failed)
         if (hasher.final() != frame_header.crc) {
-            return error.crc_mismatch;
+            return error.crc_frame_header_mismatch;
         }
 
         return frame_header;
@@ -269,7 +343,7 @@ pub const SubFrame = struct {
     wasted_bits: u5,
     subblock: []const i64,
 
-    pub fn parseSubframe(br: *std.io.BitReader(.big, std.io.AnyReader), alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
+    pub fn parseSubframe(br: anytype, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
         var subframe: SubFrame = undefined;
         // std.debug.print("BR start: {}\n", .{br});
 
@@ -433,6 +507,8 @@ pub const SubFrame = struct {
                 break :blk buf;
             },
         };
+
+        // std.debug.print("Created: {d}\n", .{subframe.subblock});
 
         return subframe;
     }

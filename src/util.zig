@@ -5,7 +5,7 @@ pub fn shortenIntToTwosComplementIntOfSetBits(comptime T: type, val: T, bit_size
     return (val & (uppermost - 1)) - (val & uppermost);
 }
 
-pub fn readTwosComplementIntegerOfSetBits(br: *std.io.BitReader(.big, std.io.AnyReader), comptime T: type, bit_count: u16) !T {
+pub fn readTwosComplementIntegerOfSetBits(br: anytype, comptime T: type, bit_count: u16) !T {
     return shortenIntToTwosComplementIntOfSetBits(
         T,
         try br.readBitsNoEof(T, bit_count),

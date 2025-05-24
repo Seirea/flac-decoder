@@ -14,7 +14,7 @@ pub const CodedResidual = struct {
     // the number of bits allocated to the Rice Parameter in each partition
     parameter_size: ParameterSize,
 
-    pub fn readCodedResidual(br: *std.io.BitReader(.big, std.io.AnyReader)) !CodedResidual {
+    pub fn readCodedResidual(br: anytype) !CodedResidual {
         var out: CodedResidual = undefined;
         const coding_method: u2 = try br.readBitsNoEof(u2, 2);
         out.parameter_size = switch (coding_method) {
@@ -35,7 +35,7 @@ pub const Partition = struct {
     escaped: bool,
     parameter: u5,
 
-    pub fn readPartition(br: *std.io.BitReader(.big, std.io.AnyReader), residual: CodedResidual) !Partition {
+    pub fn readPartition(br: anytype, residual: CodedResidual) !Partition {
         const param: u5 = switch (residual.parameter_size) {
             .@"4-bits" => try br.readBitsNoEof(u5, 4),
             .@"5-bits" => try br.readBitsNoEof(u5, 5),
@@ -52,7 +52,7 @@ pub const Partition = struct {
         };
     }
 
-    pub fn readNextResidual(partition: Partition, br: *std.io.BitReader(.big, std.io.AnyReader)) !i32 {
+    pub fn readNextResidual(partition: Partition, br: anytype) !i32 {
         if (partition.escaped) {
             return try util.readTwosComplementIntegerOfSetBits(
                 br,

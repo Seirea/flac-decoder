@@ -32,13 +32,12 @@ pub fn main() !void {
         switch (block_header.metadata_block_type) {
             // streaminfo
             .streaminfo => {
-                const stream_info = try lib.metadata.block.getBlockFromReader(
+                streaminfo_saved = try lib.metadata.block.getBlockFromReader(
                     lib.metadata.block.StreamInfo,
                     file_reader.any(),
                 );
-                streaminfo_saved = stream_info;
 
-                std.debug.print("StreamInfo Block: {}\n", .{stream_info});
+                std.debug.print("StreamInfo Block: {}\n", .{streaminfo_saved.?});
             },
             .seek_table => {
                 const seek_table = try lib.metadata.block.SeekTable.createFromReader(
@@ -121,11 +120,6 @@ pub fn main() !void {
     const samplerate = streaminfo_saved.?.sample_rate;
     // const duration = num_of_samples / samplerate;
 
-    const sampleType = switch (bit_depth) {
-        16 => i16,
-        else => @panic("unknown bit depth"),
-    };
-
     try stdout.writeAll("RIFF");
     const header_size = 36;
     try stdout.writeInt(
@@ -151,40 +145,42 @@ pub fn main() !void {
         std.builtin.Endian.little,
     );
 
-    // write audio
-    var read_samples: usize = 0;
-    while (read_samples < num_of_samples) {
-        const frame = try lib.frame.FrameHeader.parseFrameHeader(file_reader.any());
-        // std.debug.print("PARSED FRAME: {}\n", .{frame});
+    // var frame_arena = std.heap.ArenaAllocator.init(allocator);
 
-        var br = std.io.bitReader(.big, file_reader.any());
-        for (0..frame.channel.channelToNumberOfSubframesMinusOne() + 1) |i| {
-            const subframe = try lib.frame.SubFrame.parseSubframe(
-                &br,
-                allocator,
-                frame,
-                null,
-                @truncate(i),
-            );
-            // std.debug.print("Subframe: {}\n", .{subframe});
-            if (i == 0) {
-                read_samples += subframe.subblock.len;
-            }
-            for (subframe.subblock) |sample| {
+    while (lib.frame.Frame.parseFrame(file_reader.any(), allocator, streaminfo_saved) catch null) |x| {
+        for (0..x.header.block_size) |sample| {
+            for (x.sub_frames) |subframe| {
                 try stdout.writeInt(
-                    sampleType,
-                    @truncate(sample),
+                    i16,
+                    @truncate(subframe.subblock[sample]),
 
                     std.builtin.Endian.little,
                 );
             }
         }
-        br.alignToByte();
-
-        // FIXME: this must be added to the library
-        _ = try file_reader.readInt(u16, .big);
-        // std.debug.print("Frame CRC16: {}\n", .{crc});
     }
+    // frame_arena.deinit();
+
+    // write audio
+    //     for (0..frame.channel.channelToNumberOfSubframesMinusOne() + 1) |i| {
+    //         const subframe = try lib.frame.SubFrame.parseSubframe(
+    //             &br,
+    //             allocator,
+    //             frame,
+    //             null,
+    //             @truncate(i),
+    //         );
+    //         // std.debug.print("Subframe: {}\n", .{subframe});
+    //         if (i == 0) {
+    //             read_samples += subframe.subblock.len;
+    //         }
+    //     }
+    //     br.alignToByte();
+
+    //     // FIXME: this must be added to the library
+    //     _ = try file_reader.readInt(u16, .big);
+    //     // std.debug.print("Frame CRC16: {}\n", .{crc});
+    // }
 
     try bw.flush();
 
