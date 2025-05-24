@@ -8,7 +8,7 @@ pub const Signature = extern struct {
 const allocator = std.heap.smp_allocator;
 
 pub fn main() !void {
-    const file = try std.fs.cwd().openFile("test/a.flac", .{});
+    const file = try std.fs.cwd().openFile("test/example_3.flac", .{});
     const file_reader = file.reader();
 
     const sig: Signature = try file_reader.readStruct(Signature);

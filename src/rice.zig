@@ -1,5 +1,5 @@
 const std = @import("std");
-
+const util = @import("util.zig");
 pub const ParameterSize = enum {
     @"4-bits",
     @"5-bits",
@@ -47,14 +47,15 @@ pub const Partition = struct {
         };
 
         return .{
-            .parameter = param,
+            .parameter = if (escape) try br.readBitsNoEof(u5, 5) else param,
             .escaped = escape,
         };
     }
 
     pub fn readNextResidual(partition: Partition, br: *std.io.BitReader(.big, std.io.AnyReader)) !i32 {
         if (partition.escaped) {
-            return try br.readBitsNoEof(
+            return try util.readTwosComplementIntegerOfSetBits(
+                br,
                 // std.meta.Int(.signed, partition.parameter),
                 i32,
                 partition.parameter,

@@ -1,5 +1,6 @@
 const std = @import("std");
 const rice = @import("../rice.zig");
+const util = @import("../util.zig");
 const StreamInfo = @import("../metadata/block.zig").StreamInfo;
 const crc8 = std.hash.crc.Crc(u8, .{
     .polynomial = 0x07,
@@ -17,6 +18,7 @@ const FrameParsingError = error{
     stream_info_does_not_exist,
     crc_mismatch,
     forbidden_fixed_predictor_order,
+    negative_lpc_shift,
 };
 
 pub const ParsingBlockSize = enum(u4) {
@@ -259,13 +261,13 @@ pub const SubFrameHeader = union(enum) {
     fixed_predictor: u3,
 
     /// THE ACTUAL ORDER OF THE LINEAR PREDICTOR IS THIS VALUE + 1
-    linear_predictor: u5,
+    linear_predictor_minus_one: u5,
 };
 
 pub const SubFrame = struct {
     header: SubFrameHeader,
     wasted_bits: u5,
-    subblock: []const i32,
+    subblock: []const i64,
 
     pub fn parseSubframe(br: *std.io.BitReader(.big, std.io.AnyReader), alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
         var subframe: SubFrame = undefined;
@@ -282,7 +284,7 @@ pub const SubFrame = struct {
             0b000010...0b000111 => return error.using_reserved_value,
             0b001000...0b001100 => |x| SubFrameHeader{ .fixed_predictor = @as(u3, @truncate(x)) },
             0b001101...0b011111 => return error.using_reserved_value,
-            0b100000...0b111111 => |x| SubFrameHeader{ .linear_predictor = @as(u5, @truncate(x)) },
+            0b100000...0b111111 => |x| SubFrameHeader{ .linear_predictor_minus_one = @as(u5, @truncate(x)) },
         };
 
         subframe.wasted_bits = 0;
@@ -306,59 +308,78 @@ pub const SubFrame = struct {
         // std.debug.print("Real bit depth for subframe: {d}\n", .{real_bit_depth});
 
         // const verbatim_int_type = std.meta.Int(.signed, real_bit_depth);
-        const verbatim_int_type = i32;
+        const verbatim_int_type = i64;
         subframe.subblock = switch (subframe.header) {
-            .constant => &[1]i32{(try br.readBitsNoEof(verbatim_int_type, real_bit_depth)) << subframe.wasted_bits},
+            .constant => &[1]verbatim_int_type{(try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth)) << subframe.wasted_bits},
             .verbatim => blk: {
-                var buf = try alloc.alloc(i32, frame.block_size);
+                var buf = try alloc.alloc(verbatim_int_type, frame.block_size);
                 for (0..buf.len) |i| {
-                    buf[i] = (try br.readBitsNoEof(verbatim_int_type, real_bit_depth)) << subframe.wasted_bits;
+                    // i(var)
+
+                    buf[i] = (try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth)) << subframe.wasted_bits;
                 }
                 break :blk buf;
             },
             .fixed_predictor => |order| blk: {
-                var buf = try alloc.alloc(i32, frame.block_size);
+                var buf = try alloc.alloc(verbatim_int_type, frame.block_size);
 
                 //read warmup samples
                 for (0..order) |i| {
-                    buf[i] = try br.readBitsNoEof(verbatim_int_type, real_bit_depth);
+                    buf[i] = try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth);
                 }
                 // std.debug.print("buf after warmup: {d}\n", .{buf});
 
                 const coded_residual = try rice.CodedResidual.readCodedResidual(br);
                 // std.debug.print("coded residual: {}\n", .{coded_residual});
-                var p1 = try rice.Partition.readPartition(br, coded_residual);
+                const number_of_samples_in_each_partition = frame.block_size >> coded_residual.order;
+                var current_partition = try rice.Partition.readPartition(br, coded_residual);
+
                 // std.debug.print("PARTITION: {}\n", .{p1});
 
                 switch (order) {
                     0 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            buf[i] = try p1.readNextResidual(br);
+                            if (i % number_of_samples_in_each_partition == 0) {
+                                current_partition = try rice.Partition.readPartition(br, coded_residual);
+                            }
+                            buf[i] = try current_partition.readNextResidual(br);
                         }
                     },
                     1 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            buf[i] = buf[i - 1] + try p1.readNextResidual(br);
+                            if (i % number_of_samples_in_each_partition == 0) {
+                                current_partition = try rice.Partition.readPartition(br, coded_residual);
+                            }
+                            buf[i] = buf[i - 1] + try current_partition.readNextResidual(br);
                         }
                     },
                     2 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            buf[i] = 2 * buf[i - 1] - buf[i - 2] + try p1.readNextResidual(br);
+                            if (i % number_of_samples_in_each_partition == 0) {
+                                current_partition = try rice.Partition.readPartition(br, coded_residual);
+                            }
+                            buf[i] = 2 * buf[i - 1] - buf[i - 2] + try current_partition.readNextResidual(br);
                         }
                     },
                     3 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            buf[i] = 3 * buf[i - 1] - 3 * buf[i - 2] + buf[i - 3] + try p1.readNextResidual(br);
+                            if (i % number_of_samples_in_each_partition == 0) {
+                                current_partition = try rice.Partition.readPartition(br, coded_residual);
+                            }
+                            buf[i] = 3 * buf[i - 1] - 3 * buf[i - 2] + buf[i - 3] + try current_partition.readNextResidual(br);
                         }
                     },
                     4 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            buf[i] = 4 * buf[i - 1] - 6 * buf[i - 2] + 4 * buf[i - 3] - buf[i - 4] + try p1.readNextResidual(br);
+                            if (i % number_of_samples_in_each_partition == 0) {
+                                current_partition = try rice.Partition.readPartition(br, coded_residual);
+                            }
+                            buf[i] = 4 * buf[i - 1] - 6 * buf[i - 2] + 4 * buf[i - 3] - buf[i - 4] + try current_partition.readNextResidual(br);
                         }
                     },
                     else => {
@@ -370,8 +391,47 @@ pub const SubFrame = struct {
 
                 break :blk buf;
             },
-            // TODO: implement the rest
-            else => @panic("TODO: impl others :)"),
+            .linear_predictor_minus_one => |order_minus_one| blk: {
+                const order: u6 = order_minus_one + 1;
+
+                var buf = try alloc.alloc(verbatim_int_type, frame.block_size);
+                for (0..order) |i| {
+                    buf[i] = try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth);
+                }
+
+                const coefficient_precision: u4 = try br.readBitsNoEof(u4, 4) + 1;
+
+                // TODO: Add a safe mode to the library so that this check can be turned off if needed
+                // Defined under https://www.rfc-editor.org/rfc/rfc9639.html#appendix-B.4-1 to never be negative.
+                const prediction_right_shift: i5 = try br.readBitsNoEof(i5, 5);
+                if (prediction_right_shift < 0) {
+                    return error.negative_lpc_shift;
+                }
+
+                var coefficients = try alloc.alloc(i15, order);
+                for (0..order) |i| {
+                    coefficients[i] = try util.readTwosComplementIntegerOfSetBits(br, i15, coefficient_precision);
+                }
+
+                const coded_residual = try rice.CodedResidual.readCodedResidual(br);
+                const number_of_samples_in_each_partition = frame.block_size >> coded_residual.order;
+
+                var current_partition = try rice.Partition.readPartition(br, coded_residual);
+
+                for (order..buf.len) |i| {
+                    if (i % number_of_samples_in_each_partition == 0) {
+                        current_partition = try rice.Partition.readPartition(br, coded_residual);
+                    }
+                    var predicted: i64 = 0;
+                    for (0..order) |x| {
+                        predicted += @as(verbatim_int_type, @intCast(coefficients[x])) * buf[i - x - 1];
+                    }
+
+                    buf[i] = (predicted >> @intCast(prediction_right_shift)) + try current_partition.readNextResidual(br);
+                }
+
+                break :blk buf;
+            },
         };
 
         return subframe;
