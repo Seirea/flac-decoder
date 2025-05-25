@@ -20,6 +20,8 @@ const crc16 = std.hash.crc.Crc(u16, .{
     .xor_output = 0x0,
 });
 
+pub const AnyBitReader = std.io.BitReader(.big, std.io.AnyReader);
+
 const FrameParsingError = error{
     incorrect_frame_sync,
     missing_zero_bit, // subframe
@@ -163,7 +165,7 @@ pub const Frame = struct {
         try crc_reader.bw.flushBits();
 
         const fin = hasher.final();
-        // std.debug.print("footer: {} | fin: {}\n", .{ frame.footer, fin });
+        std.debug.print("Footer says CRC should be: {} | What we got: {}\n", .{ frame.footer, fin });
         // CRC16 Check (return error if failed)
         if (fin != frame.footer) {
             return error.crc_frame_footer_mismatch;
@@ -453,10 +455,10 @@ pub const SubFrame = struct {
             else => {},
         }
 
-        // std.debug.print("Real bit depth for subframe: {d}\n", .{real_bit_depth});
+        const wasted = subframe.wasted_bits;
+        // std.debug.print("Subframe header: {} | wasted: {} | real bit depth: {}\n", .{ subframe.header, wasted, real_bit_depth });
 
         // const verbatim_int_type = std.meta.Int(.signed, real_bit_depth);
-        const wasted = subframe.wasted_bits;
         const verbatim_int_type = i64;
 
         const subblock_zone = tracy.Zone.begin(.{
@@ -490,11 +492,12 @@ pub const SubFrame = struct {
                 //read warmup samples
                 for (0..order) |i| {
                     buf[i] = (try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth)) << wasted;
+                    // std.debug.print("Warmup sample: {}\n", .{buf[i]});
                 }
                 // std.debug.print("buf after warmup: {d}\n", .{buf});
 
                 const coded_residual = try rice.CodedResidual.readCodedResidual(br);
-                // std.debug.print("coded residual: {}\n", .{coded_residual});
+                // std.debug.print("coded residual asdasdsd: {}\n    -> for frame {}\n", .{ coded_residual, frame });
                 const number_of_samples_in_each_partition = frame.block_size >> coded_residual.order;
                 var current_partition = try rice.Partition.readPartition(br, coded_residual);
 
