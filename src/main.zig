@@ -8,7 +8,7 @@ pub const Signature = extern struct {
 const allocator = std.heap.smp_allocator;
 
 pub fn main() !void {
-    const file = try std.fs.cwd().openFile("test/06 Honey Bee.flac", .{});
+    const file = try std.fs.cwd().openFile("test/example_1.flac", .{});
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
 
