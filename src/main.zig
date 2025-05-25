@@ -1,13 +1,40 @@
 const std = @import("std");
 const lib = @import("flac_decoder_lib");
+const builtin = @import("builtin");
+
+// If `tracy_impl` is not set in your root file, Tracy integration will be disabled.
+pub const tracy_impl = @import("tracy_impl");
+
+// You can optionally configure Tracy by setting `tracy_options` in your root file.
+pub const tracy = @import("tracy");
+pub const tracy_options: tracy.Options = .{
+    .on_demand = false,
+    .no_broadcast = false,
+    .only_localhost = false,
+    .only_ipv4 = false,
+    .delayed_init = false,
+    .manual_lifetime = false,
+    .verbose = false,
+    .data_port = null,
+    .broadcast_port = null,
+    .default_callstack_depth = 20,
+};
 
 pub const Signature = extern struct {
     sig: [4]u8,
 };
 
-const allocator = std.heap.smp_allocator;
+var tracy_allocator = tracy.Allocator{ .parent = std.heap.smp_allocator };
 
 pub fn main() !void {
+    var allocator = tracy_allocator.allocator();
+
+    const zone = tracy.Zone.begin(.{
+        .name = "Main",
+        .src = @src(),
+        .color = .tomato,
+    });
+    defer zone.end();
     const file = try std.fs.cwd().openFile("test/06 Honey Bee.flac", .{});
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
@@ -151,6 +178,7 @@ pub fn main() !void {
         error.EndOfStream => null,
         else => |er| return er,
     }) |x| {
+
         // std.debug.print("Channel: {}\n", .{x.header.channel});
         // std.debug.print("SUBFRAMES: {any}\n", .{x.sub_frames});
         for (0..x.header.block_size) |sample| {

@@ -2,6 +2,8 @@ const std = @import("std");
 const rice = @import("../rice.zig");
 const util = @import("../util.zig");
 const StreamInfo = @import("../metadata/block.zig").StreamInfo;
+const tracy = @import("tracy");
+
 const crc8 = std.hash.crc.Crc(u8, .{
     .polynomial = 0x07,
     .initial = 0x00,
@@ -127,6 +129,12 @@ pub const Frame = struct {
     footer: u16,
 
     pub fn parseFrame(reader: std.io.AnyReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
+        const zone = tracy.Zone.begin(.{
+            .name = "Parse Frame",
+            .src = @src(),
+            .color = .blue,
+        });
+        defer zone.end();
         var frame: Frame = undefined;
 
         var hasher = crc16.init();
@@ -294,6 +302,12 @@ pub const FrameHeader = struct {
     crc: u8,
 
     pub fn parseFrameHeader(reader: std.io.AnyReader) !FrameHeader {
+        const zone = tracy.Zone.begin(.{
+            .name = "Parse Frame Header",
+            .src = @src(),
+            .color = .blue,
+        });
+        defer zone.end();
         var hasher = crc8.init();
         const crc_writer = CrcWriter(crc8){ .crc_obj = &hasher };
 
@@ -388,6 +402,13 @@ pub const SubFrame = struct {
     subblock: []i64,
 
     pub fn parseSubframe(br: anytype, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
+        const zone = tracy.Zone.begin(.{
+            .name = "Parse SUB Frame",
+            .src = @src(),
+            .color = .green,
+        });
+
+        defer zone.end();
         var subframe: SubFrame = undefined;
         // std.debug.print("BR start: {}\n", .{br});
 
@@ -437,6 +458,12 @@ pub const SubFrame = struct {
         // const verbatim_int_type = std.meta.Int(.signed, real_bit_depth);
         const wasted = subframe.wasted_bits;
         const verbatim_int_type = i64;
+
+        const subblock_zone = tracy.Zone.begin(.{
+            .name = "Subblock Parse",
+            .src = @src(),
+            .color = .pink,
+        });
         subframe.subblock = switch (subframe.header) {
             .constant => blk: {
                 const buf = try alloc.alloc(verbatim_int_type, frame.block_size);
@@ -570,7 +597,7 @@ pub const SubFrame = struct {
                 break :blk buf;
             },
         };
-
+        subblock_zone.end();
         // std.debug.print("Created: {d}\n", .{subframe.subblock});
 
         return subframe;
