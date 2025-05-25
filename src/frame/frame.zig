@@ -131,12 +131,12 @@ pub const Frame = struct {
     footer: u16,
 
     pub fn parseFrame(reader: std.io.AnyReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
-        const zone = tracy.Zone.begin(.{
-            .name = "Parse Frame",
-            .src = @src(),
-            .color = .blue,
-        });
-        defer zone.end();
+        // const zone = tracy.Zone.begin(.{
+        //     .name = "Parse Frame",
+        //     .src = @src(),
+        //     .color = .blue,
+        // });
+        // defer zone.end();
         var frame: Frame = undefined;
 
         var hasher = crc16.init();
@@ -297,6 +297,13 @@ pub fn ReaderToCRCWriter(comptime T: type) type {
 
         // fn readBitsNoEof
         pub fn readBitsNoEof(self: *ReaderToCRCWriter(T), comptime I: type, num: u16) !I {
+            const zone = tracy.Zone.begin(.{
+                .name = std.fmt.comptimePrint("readBits->{s}", .{@typeName(I)}),
+                .src = @src(),
+                .color = .blue,
+            });
+            defer zone.end();
+
             const readed = try self.br.readBitsNoEof(I, num);
             try self.bw.writeBits(readed, num);
 
@@ -322,12 +329,12 @@ pub const FrameHeader = struct {
     crc: u8,
 
     pub fn parseFrameHeader(reader: std.io.AnyReader) !FrameHeader {
-        const zone = tracy.Zone.begin(.{
-            .name = "Parse Frame Header",
-            .src = @src(),
-            .color = .blue,
-        });
-        defer zone.end();
+        // const zone = tracy.Zone.begin(.{
+        //     .name = "Parse Frame Header",
+        //     .src = @src(),
+        //     .color = .blue,
+        // });
+        // defer zone.end();
         var hasher = crc8.init();
         const crc_writer = CrcWriter(crc8){ .crc_obj = &hasher };
 
@@ -422,13 +429,13 @@ pub const SubFrame = struct {
     subblock: []i64,
 
     pub fn parseSubframe(br: anytype, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
-        const zone = tracy.Zone.begin(.{
-            .name = "Parse SUB Frame",
-            .src = @src(),
-            .color = .green,
-        });
+        // const zone = tracy.Zone.begin(.{
+        //     .name = "Parse SUB Frame",
+        //     .src = @src(),
+        //     .color = .green,
+        // });
 
-        defer zone.end();
+        // defer zone.end();
         var subframe: SubFrame = undefined;
         // std.debug.print("BR start: {}\n", .{br});
 
@@ -521,11 +528,11 @@ pub const SubFrame = struct {
 
                 // std.debug.print("first partition: {}\n", .{current_partition});
 
-                const partition_zone = tracy.Zone.begin(.{
-                    .name = "Parse partition (fixed)",
-                    .src = @src(),
-                    .color = .white,
-                });
+                // const partition_zone = tracy.Zone.begin(.{
+                //     .name = "Parse partition (fixed)",
+                //     .src = @src(),
+                //     .color = .white,
+                // });
                 switch (order) {
                     0 => {
                         // read remaining samples
@@ -577,7 +584,7 @@ pub const SubFrame = struct {
                         return error.forbidden_fixed_predictor_order;
                     },
                 }
-                partition_zone.end();
+                // partition_zone.end();
                 // std.debug.print("buf: {d}\n", .{buf});
 
                 break :blk buf;

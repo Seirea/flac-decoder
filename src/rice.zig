@@ -63,6 +63,12 @@ pub const Partition = struct {
     }
 
     pub fn readNextResidual(partition: Partition, br: anytype) !i32 {
+        const zone = tracy.Zone.begin(.{
+            .name = "readNextResidual",
+            .src = @src(),
+            .color = .green,
+        });
+        defer zone.end();
         if (partition.escaped) {
             if (partition.parameter == 0) {
                 return 0;

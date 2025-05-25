@@ -179,20 +179,20 @@ pub fn main() !void {
         error.EndOfStream => null,
         else => |er| return er,
     }) |x| {
-
+        _ = x;
         // std.debug.print("Channel: {}\n", .{x.header.channel});
         // std.debug.print("SUBFRAMES: {any}\n", .{x.sub_frames});
-        for (0..x.header.block_size) |sample| {
-            for (x.sub_frames) |subframe| {
-                try stdout.writeInt(
-                    i16,
-                    @truncate(subframe.subblock[sample]),
+        // for (0..x.header.block_size) |sample| {
+        //     for (x.sub_frames) |subframe| {
+        //         try stdout.writeInt(
+        //             i16,
+        //             @truncate(subframe.subblock[sample]),
 
-                    std.builtin.Endian.little,
-                );
-            }
-        }
-        _ = frame_arena.reset(.retain_capacity);
+        //             std.builtin.Endian.little,
+        //         );
+        //     }
+        // }
+        // _ = frame_arena.reset(.retain_capacity);
     }
     frame_arena.deinit();
 
