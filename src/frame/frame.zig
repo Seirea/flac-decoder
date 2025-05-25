@@ -161,6 +161,48 @@ pub const Frame = struct {
             return error.crc_frame_footer_mismatch;
         }
 
+        // stereo decorrelation
+
+        // TODO: check if the compiler auto vectorizes these, because it SHOULD
+        switch (frame.header.channel) {
+            .left_side => {
+                const left = frame.sub_frames[0].subblock; // left
+                var side = frame.sub_frames[1].subblock; // side
+
+                for (0..frame.header.block_size) |i| {
+                    side[i] = left[i] - side[i];
+                }
+            },
+            .side_right => {
+                var side = frame.sub_frames[0].subblock; // side
+                const right = frame.sub_frames[1].subblock; // right
+
+                for (0..frame.header.block_size) |i| {
+                    side[i] = side[i] + right[i];
+                }
+            },
+            .mid_side => {
+                var mid = frame.sub_frames[0].subblock; // mid
+                var side = frame.sub_frames[1].subblock; // side
+
+                for (0..frame.header.block_size) |i| {
+                    var mid_shifted = (mid[i] << 1);
+                    const side_sample = side[i];
+
+                    if (side_sample & 1 == 1) {
+                        mid_shifted += 1;
+                    }
+
+                    const new_l = (mid_shifted + side_sample) >> 1;
+                    const new_r = (mid_shifted - side_sample) >> 1;
+
+                    mid[i] = new_l;
+                    side[i] = new_r;
+                }
+            },
+            else => {},
+        }
+
         return frame;
     }
     pub fn calculateSamples(_: Frame) []i32 {
@@ -343,7 +385,7 @@ pub const SubFrameHeader = union(enum) {
 pub const SubFrame = struct {
     header: SubFrameHeader,
     wasted_bits: u5,
-    subblock: []const i64,
+    subblock: []i64,
 
     pub fn parseSubframe(br: anytype, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
         var subframe: SubFrame = undefined;
@@ -373,26 +415,45 @@ pub const SubFrame = struct {
 
         // std.debug.print("BR 3: {}, {}\n", .{ br, br.reader.context });
         const bit_depth_minus_one = try frame.bit_depth.asIntMinusOne(stream_info);
-        const offset_if_is_side_subframe: u1 = switch (frame.channel) {
-            .left_side, .mid_side => if (channel_num == 1) 1 else 0,
-            .side_right => if (channel_num == 0) 1 else 0,
-            else => 0,
-        };
-        const wasted = subframe.wasted_bits;
         // std.debug.print("intercorrelation offset: {} | wasted bits: {}\n", .{ offset_if_is_side_subframe, wasted });
-        const real_bit_depth: u16 = (bit_depth_minus_one - wasted) + offset_if_is_side_subframe + 1;
+        var real_bit_depth: u16 = (bit_depth_minus_one - subframe.wasted_bits) + 1;
+
+        switch (frame.channel) {
+            .left_side, .mid_side => {
+                if (channel_num == 1) {
+                    real_bit_depth += 1;
+                }
+            },
+            .side_right => {
+                if (channel_num == 0) {
+                    real_bit_depth += 1;
+                }
+            },
+            else => {},
+        }
+
         // std.debug.print("Real bit depth for subframe: {d}\n", .{real_bit_depth});
 
         // const verbatim_int_type = std.meta.Int(.signed, real_bit_depth);
+        const wasted = subframe.wasted_bits;
         const verbatim_int_type = i64;
         subframe.subblock = switch (subframe.header) {
-            .constant => &[1]verbatim_int_type{(try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth)) << subframe.wasted_bits},
+            .constant => blk: {
+                const buf = try alloc.alloc(verbatim_int_type, frame.block_size);
+                const target_val = (try util.readTwosComplementIntegerOfSetBits(
+                    br,
+                    verbatim_int_type,
+                    real_bit_depth,
+                )) << wasted;
+                @memset(buf, target_val);
+                break :blk buf;
+            },
             .verbatim => blk: {
                 var buf = try alloc.alloc(verbatim_int_type, frame.block_size);
                 for (0..buf.len) |i| {
                     // i(var)
 
-                    buf[i] = (try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth)) << subframe.wasted_bits;
+                    buf[i] = (try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth)) << wasted;
                 }
                 break :blk buf;
             },
@@ -401,7 +462,7 @@ pub const SubFrame = struct {
 
                 //read warmup samples
                 for (0..order) |i| {
-                    buf[i] = try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth);
+                    buf[i] = (try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth)) << wasted;
                 }
                 // std.debug.print("buf after warmup: {d}\n", .{buf});
 
@@ -419,7 +480,7 @@ pub const SubFrame = struct {
                             if (i % number_of_samples_in_each_partition == 0) {
                                 current_partition = try rice.Partition.readPartition(br, coded_residual);
                             }
-                            buf[i] = try current_partition.readNextResidual(br);
+                            buf[i] = (try current_partition.readNextResidual(br)) << wasted;
                         }
                     },
                     1 => {
@@ -428,7 +489,7 @@ pub const SubFrame = struct {
                             if (i % number_of_samples_in_each_partition == 0) {
                                 current_partition = try rice.Partition.readPartition(br, coded_residual);
                             }
-                            buf[i] = buf[i - 1] + try current_partition.readNextResidual(br);
+                            buf[i] = (buf[i - 1] + try current_partition.readNextResidual(br)) << wasted;
                         }
                     },
                     2 => {
@@ -437,7 +498,7 @@ pub const SubFrame = struct {
                             if (i % number_of_samples_in_each_partition == 0) {
                                 current_partition = try rice.Partition.readPartition(br, coded_residual);
                             }
-                            buf[i] = 2 * buf[i - 1] - buf[i - 2] + try current_partition.readNextResidual(br);
+                            buf[i] = (2 * buf[i - 1] - buf[i - 2] + try current_partition.readNextResidual(br)) << wasted;
                         }
                     },
                     3 => {
@@ -446,7 +507,7 @@ pub const SubFrame = struct {
                             if (i % number_of_samples_in_each_partition == 0) {
                                 current_partition = try rice.Partition.readPartition(br, coded_residual);
                             }
-                            buf[i] = 3 * buf[i - 1] - 3 * buf[i - 2] + buf[i - 3] + try current_partition.readNextResidual(br);
+                            buf[i] = (3 * buf[i - 1] - 3 * buf[i - 2] + buf[i - 3] + try current_partition.readNextResidual(br)) << wasted;
                         }
                     },
                     4 => {
@@ -455,7 +516,7 @@ pub const SubFrame = struct {
                             if (i % number_of_samples_in_each_partition == 0) {
                                 current_partition = try rice.Partition.readPartition(br, coded_residual);
                             }
-                            buf[i] = 4 * buf[i - 1] - 6 * buf[i - 2] + 4 * buf[i - 3] - buf[i - 4] + try current_partition.readNextResidual(br);
+                            buf[i] = (4 * buf[i - 1] - 6 * buf[i - 2] + 4 * buf[i - 3] - buf[i - 4] + try current_partition.readNextResidual(br)) << wasted;
                         }
                     },
                     else => {
@@ -472,7 +533,7 @@ pub const SubFrame = struct {
 
                 var buf = try alloc.alloc(verbatim_int_type, frame.block_size);
                 for (0..order) |i| {
-                    buf[i] = try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth);
+                    buf[i] = (try util.readTwosComplementIntegerOfSetBits(br, verbatim_int_type, real_bit_depth)) << wasted;
                 }
 
                 const coefficient_precision: u4 = try br.readBitsNoEof(u4, 4) + 1;
@@ -503,7 +564,7 @@ pub const SubFrame = struct {
                         predicted += @as(verbatim_int_type, @intCast(coefficients[x])) * buf[i - x - 1];
                     }
 
-                    buf[i] = (predicted >> @intCast(prediction_right_shift)) + try current_partition.readNextResidual(br);
+                    buf[i] = ((predicted >> @intCast(prediction_right_shift)) + try current_partition.readNextResidual(br)) << wasted;
                 }
 
                 break :blk buf;

@@ -8,7 +8,7 @@ pub const Signature = extern struct {
 const allocator = std.heap.smp_allocator;
 
 pub fn main() !void {
-    const file = try std.fs.cwd().openFile("test/testout.flac", .{});
+    const file = try std.fs.cwd().openFile("test/06 Honey Bee.flac", .{});
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
 
@@ -145,12 +145,14 @@ pub fn main() !void {
         std.builtin.Endian.little,
     );
 
-    // var frame_arena = std.heap.ArenaAllocator.init(allocator);
+    var frame_arena = std.heap.ArenaAllocator.init(allocator);
 
-    while (lib.frame.Frame.parseFrame(file_reader.any(), allocator, streaminfo_saved) catch |err| switch (err) {
+    while (lib.frame.Frame.parseFrame(file_reader.any(), frame_arena.allocator(), streaminfo_saved) catch |err| switch (err) {
         error.EndOfStream => null,
         else => |er| return er,
     }) |x| {
+        // std.debug.print("Channel: {}\n", .{x.header.channel});
+        // std.debug.print("SUBFRAMES: {any}\n", .{x.sub_frames});
         for (0..x.header.block_size) |sample| {
             for (x.sub_frames) |subframe| {
                 try stdout.writeInt(
@@ -161,8 +163,9 @@ pub fn main() !void {
                 );
             }
         }
+        _ = frame_arena.reset(.retain_capacity);
     }
-    // frame_arena.deinit();
+    frame_arena.deinit();
 
     // write audio
     //     for (0..frame.channel.channelToNumberOfSubframesMinusOne() + 1) |i| {
