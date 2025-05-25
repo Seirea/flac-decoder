@@ -157,7 +157,7 @@ pub const Frame = struct {
         try crc_reader.bw.flushBits();
 
         const fin = hasher.final();
-        // std.debug.print("Footer says CRC should be: {} | What we got: {}\n", .{ frame.footer, fin });
+        std.debug.print("Footer says CRC should be: {} | What we got: {}\n", .{ frame.footer, fin });
         // CRC16 Check (return error if failed)
         if (fin != frame.footer) {
             return error.crc_frame_footer_mismatch;

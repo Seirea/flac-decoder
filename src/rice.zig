@@ -53,7 +53,7 @@ pub const Partition = struct {
         };
     }
 
-    pub fn readNextResidual(partition: Partition, br: *frame.AnyBitReader) !i32 {
+    pub fn readNextResidual(partition: Partition, br: anytype) !i32 {
         if (partition.escaped) {
             if (partition.parameter == 0) {
                 return 0;
