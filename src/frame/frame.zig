@@ -500,6 +500,11 @@ pub const SubFrame = struct {
 
                 // std.debug.print("PARTITION: {}\n", .{p1});
 
+                const partition_zone = tracy.Zone.begin(.{
+                    .name = "Parse partition (fixed)",
+                    .src = @src(),
+                    .color = .white,
+                });
                 switch (order) {
                     0 => {
                         // read remaining samples
@@ -550,7 +555,7 @@ pub const SubFrame = struct {
                         return error.forbidden_fixed_predictor_order;
                     },
                 }
-
+                partition_zone.end();
                 // std.debug.print("buf: {d}\n", .{buf});
 
                 break :blk buf;
@@ -582,6 +587,11 @@ pub const SubFrame = struct {
 
                 var current_partition = try rice.Partition.readPartition(br, coded_residual);
 
+                const partition_zone = tracy.Zone.begin(.{
+                    .name = "Parse partition",
+                    .src = @src(),
+                    .color = .white,
+                });
                 for (order..buf.len) |i| {
                     if (i % number_of_samples_in_each_partition == 0) {
                         current_partition = try rice.Partition.readPartition(br, coded_residual);
@@ -593,6 +603,7 @@ pub const SubFrame = struct {
 
                     buf[i] = ((predicted >> @intCast(prediction_right_shift)) + try current_partition.readNextResidual(br)) << wasted;
                 }
+                partition_zone.end();
 
                 break :blk buf;
             },
