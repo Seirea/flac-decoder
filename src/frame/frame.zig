@@ -135,26 +135,22 @@ pub const Frame = struct {
         const crc_writer = CrcWriter(crc16){ .crc_obj = &hasher };
         var bw = std.io.bitWriter(.big, crc_writer);
         var crc_reader = ReaderToCRCWriter(crc16).init(reader, &bw);
-        var br: AnyBitReader = std.io.bitReader(.big, crc_reader.any());
 
-        // std.debug.print("\n\n\nSTARTING FRAME PARSE!\n\n\n", .{});
         frame.header = try FrameHeader.parseFrameHeader(crc_reader.any());
-        // std.debug.print("\n\n\nHEADER PARSED!\n\n\n", .{});
         const sub_count: u4 = frame.header.channel.channelToNumberOfSubframesMinusOne() + 1;
 
         frame.sub_frames = try alloc.alloc(SubFrame, sub_count);
         for (0..sub_count) |channel_id| {
             frame.sub_frames[channel_id] = try SubFrame.parseSubframe(
-                &br,
+                &crc_reader,
                 alloc,
                 frame.header,
                 stream_info,
                 @intCast(channel_id),
             );
-            // std.debug.print("\n\n\n SUBFRAMEPARSED: {}!\n\n\n", .{frame.sub_frames[channel_id].subblock.len});
         }
 
-        br.alignToByte();
+        crc_reader.br.alignToByte();
 
         // read crc
         frame.footer = try reader.readInt(u16, .big);
@@ -216,7 +212,7 @@ pub const Frame = struct {
     }
 };
 
-pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: *AnyBitReader) !Enum {
+pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: anytype) !Enum {
     const int_representation = @typeInfo(Enum).@"enum".tag_type;
 
     return @enumFromInt(try bit_reader.readBitsNoEof(int_representation, @bitSizeOf(int_representation)));
@@ -231,7 +227,7 @@ pub fn CrcWriter(comptime T: type) type {
             self.crc_obj.update(&out);
 
             // NOTE FROM STANLEY: KEEP THIS IN IT IS VERY USEFUL
-            // std.debug.print("{X:02}", .{out[0]});
+            // std.debug.print("wrote: {X} to \n{}\n", .{ out, self });
         }
     };
 }
@@ -239,11 +235,14 @@ pub fn CrcWriter(comptime T: type) type {
 pub fn ReaderToCRCWriter(comptime T: type) type {
     return struct {
         reader: std.io.AnyReader,
+        br: std.io.BitReader(.big, std.io.AnyReader),
         bw: *std.io.BitWriter(.big, CrcWriter(T)),
 
         pub fn init(reader: std.io.AnyReader, bw: *std.io.BitWriter(.big, CrcWriter(T))) ReaderToCRCWriter(T) {
+            const br = std.io.bitReader(.big, reader);
             return .{
                 .reader = reader,
+                .br = br,
                 .bw = bw,
             };
         }
@@ -268,6 +267,14 @@ pub fn ReaderToCRCWriter(comptime T: type) type {
         pub fn typeErasedReadFn(context: *const anyopaque, buffer: []u8) anyerror!usize {
             const ptr: *ReaderToCRCWriter(T) = @constCast(@ptrCast(@alignCast(context)));
             return read(ptr, buffer);
+        }
+
+        // fn readBitsNoEof
+        pub fn readBitsNoEof(self: *ReaderToCRCWriter(T), comptime I: type, num: u16) !I {
+            const readed = try self.br.readBitsNoEof(I, num);
+            try self.bw.writeBits(readed, num);
+
+            return readed;
         }
 
         pub fn readInt(self: *ReaderToCRCWriter(T), comptime I: type, endian: std.builtin.Endian) !I {
@@ -295,23 +302,22 @@ pub const FrameHeader = struct {
         var bw = std.io.bitWriter(.big, crc_writer);
 
         var crc_reader = ReaderToCRCWriter(crc8).init(reader, &bw);
-        var crc_br = std.io.bitReader(.big, crc_reader.any());
 
         var frame_header: FrameHeader = undefined;
         frame_header.unusual_sample_rate = null;
 
-        if (try crc_br.readBitsNoEof(u15, 15) != 0b111111111111100) {
+        if (try crc_reader.readBitsNoEof(u15, 15) != 0b111111111111100) {
             return error.incorrect_frame_sync;
         }
 
-        frame_header.blocking_strategy = try crc_br.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
+        frame_header.blocking_strategy = try crc_reader.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
 
-        const bs = try readCustomIntToEnum(ParsingBlockSize, &crc_br);
-        frame_header.sample_rate = try readCustomIntToEnum(ParsingSampleRate, &crc_br);
-        frame_header.channel = try readCustomIntToEnum(Channel, &crc_br);
-        frame_header.bit_depth = try readCustomIntToEnum(BitDepth, &crc_br);
+        const bs = try readCustomIntToEnum(ParsingBlockSize, &crc_reader);
+        frame_header.sample_rate = try readCustomIntToEnum(ParsingSampleRate, &crc_reader);
+        frame_header.channel = try readCustomIntToEnum(Channel, &crc_reader);
+        frame_header.bit_depth = try readCustomIntToEnum(BitDepth, &crc_reader);
 
-        if (try crc_br.readBitsNoEof(u1, 1) != 0) {
+        if (try crc_reader.readBitsNoEof(u1, 1) != 0) {
             return error.using_reserved_value;
         }
 
@@ -383,7 +389,7 @@ pub const SubFrame = struct {
     wasted_bits: u5,
     subblock: []i64,
 
-    pub fn parseSubframe(br: *AnyBitReader, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
+    pub fn parseSubframe(br: anytype, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
         var subframe: SubFrame = undefined;
         // std.debug.print("BR start: {}\n", .{br});
 
@@ -429,7 +435,7 @@ pub const SubFrame = struct {
         }
 
         const wasted = subframe.wasted_bits;
-        std.debug.print("Subframe header: {} | wasted: {} | real bit depth: {}\n", .{ subframe.header, wasted, real_bit_depth });
+        // std.debug.print("Subframe header: {} | wasted: {} | real bit depth: {}\n", .{ subframe.header, wasted, real_bit_depth });
 
         // const verbatim_int_type = std.meta.Int(.signed, real_bit_depth);
         const verbatim_int_type = i64;
@@ -473,17 +479,16 @@ pub const SubFrame = struct {
                 switch (order) {
                     0 => {
                         // read remaining samples
-                        for (order..frame.block_size) |i| {
+                        for (order..buf.len) |i| {
                             if (i % number_of_samples_in_each_partition == 0) {
                                 current_partition = try rice.Partition.readPartition(br, coded_residual);
-                                // std.debug.print("current_parition: {}\n", .{current_partition});
                             }
                             buf[i] = (try current_partition.readNextResidual(br)) << wasted;
                         }
                     },
                     1 => {
                         // read remaining samples
-                        for (order..frame.block_size) |i| {
+                        for (order..buf.len) |i| {
                             if (i % number_of_samples_in_each_partition == 0) {
                                 current_partition = try rice.Partition.readPartition(br, coded_residual);
                             }
@@ -492,7 +497,7 @@ pub const SubFrame = struct {
                     },
                     2 => {
                         // read remaining samples
-                        for (order..frame.block_size) |i| {
+                        for (order..buf.len) |i| {
                             if (i % number_of_samples_in_each_partition == 0) {
                                 current_partition = try rice.Partition.readPartition(br, coded_residual);
                             }
@@ -501,7 +506,7 @@ pub const SubFrame = struct {
                     },
                     3 => {
                         // read remaining samples
-                        for (order..frame.block_size) |i| {
+                        for (order..buf.len) |i| {
                             if (i % number_of_samples_in_each_partition == 0) {
                                 current_partition = try rice.Partition.readPartition(br, coded_residual);
                             }
@@ -510,7 +515,7 @@ pub const SubFrame = struct {
                     },
                     4 => {
                         // read remaining samples
-                        for (order..frame.block_size) |i| {
+                        for (order..buf.len) |i| {
                             if (i % number_of_samples_in_each_partition == 0) {
                                 current_partition = try rice.Partition.readPartition(br, coded_residual);
                             }
