@@ -1,4 +1,5 @@
 const std = @import("std");
+const frame = @import("frame/frame.zig");
 const util = @import("util.zig");
 pub const ParameterSize = enum {
     @"4-bits",
@@ -54,6 +55,10 @@ pub const Partition = struct {
 
     pub fn readNextResidual(partition: Partition, br: anytype) !i32 {
         if (partition.escaped) {
+            if (partition.parameter == 0) {
+                return 0;
+            }
+            // std.debug.print("IS ESCAPEDD\n", .{});
             return try util.readTwosComplementIntegerOfSetBits(
                 br,
                 // std.meta.Int(.signed, partition.parameter),
