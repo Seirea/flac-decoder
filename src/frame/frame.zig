@@ -139,6 +139,8 @@ pub const Frame = struct {
         frame.header = try FrameHeader.parseFrameHeader(crc_reader.any());
         const sub_count: u4 = frame.header.channel.channelToNumberOfSubframesMinusOne() + 1;
 
+        // std.debug.print("Parsing frame with header: {}\n", .{frame.header});
+
         frame.sub_frames = try alloc.alloc(SubFrame, sub_count);
         for (0..sub_count) |channel_id| {
             frame.sub_frames[channel_id] = try SubFrame.parseSubframe(
@@ -148,6 +150,8 @@ pub const Frame = struct {
                 stream_info,
                 @intCast(channel_id),
             );
+            // std.debug.print("Subblock {}: {any}\n", .{ channel_id, frame.sub_frames[channel_id] });
+            // std.debug.print("Subframe parsed\n\n\n", .{});
         }
 
         crc_reader.br.alignToByte();
@@ -157,7 +161,7 @@ pub const Frame = struct {
         try crc_reader.bw.flushBits();
 
         const fin = hasher.final();
-        std.debug.print("Footer says CRC should be: {} | What we got: {}\n", .{ frame.footer, fin });
+        // std.debug.print("Footer says CRC should be: {} | What we got: {}\n", .{ frame.footer, fin });
         // CRC16 Check (return error if failed)
         if (fin != frame.footer) {
             return error.crc_frame_footer_mismatch;
@@ -227,7 +231,12 @@ pub fn CrcWriter(comptime T: type) type {
             self.crc_obj.update(&out);
 
             // NOTE FROM STANLEY: KEEP THIS IN IT IS VERY USEFUL
-            // std.debug.print("wrote: {X} to \n{}\n", .{ out, self });
+            // std.debug.print("wrotebyte: {X}\n", .{out});
+        }
+
+        pub fn write(self: *CrcWriter(T), bytes: []const u8) void {
+            self.crc_obj.update(bytes);
+            // std.debug.print("wrote: {X}\n", .{bytes});
         }
     };
 }
@@ -256,14 +265,23 @@ pub fn ReaderToCRCWriter(comptime T: type) type {
 
         pub fn read(self: *ReaderToCRCWriter(T), buffer: []u8) !usize {
             const res = try self.reader.read(buffer);
-            for (buffer[0..res]) |byte| {
-                try self.bw.writeBits(byte, 8);
-            }
+            self.bw.writer.write(buffer[0..res]);
+
             return res;
         }
+
         pub fn readByte(self: *ReaderToCRCWriter(T)) !u8 {
-            return self.any().readByte();
+            // return self.any().readByte();
+            var ans: [1]u8 = undefined;
+
+            const res = try self.reader.read(&ans);
+            if (res < 1) return error.EndOfStream;
+
+            self.bw.writer.write(ans);
+
+            return ans[0];
         }
+
         pub fn typeErasedReadFn(context: *const anyopaque, buffer: []u8) anyerror!usize {
             const ptr: *ReaderToCRCWriter(T) = @constCast(@ptrCast(@alignCast(context)));
             return read(ptr, buffer);
@@ -470,17 +488,18 @@ pub const SubFrame = struct {
                 // std.debug.print("buf after warmup: {d}\n", .{buf});
 
                 const coded_residual = try rice.CodedResidual.readCodedResidual(br);
-                // std.debug.print("coded residual asdasdsd: {}\n    -> for frame {}\n", .{ coded_residual, frame });
+                // std.debug.print("coded residual ->: {}\n", .{coded_residual});
                 const number_of_samples_in_each_partition = frame.block_size >> coded_residual.order;
                 var current_partition = try rice.Partition.readPartition(br, coded_residual);
 
-                // std.debug.print("PARTITION: {}\n", .{p1});
+                // std.debug.print("first partition: {}\n", .{current_partition});
 
                 switch (order) {
                     0 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            if (i % number_of_samples_in_each_partition == 0) {
+                            // NOTE FROM STANLEY: DO NOT START A NEW PARTITION IF i == 0, BECAUSE WE ALREADY STARTED A PARTITION FOR THIS ONE
+                            if ((i != 0) and i % number_of_samples_in_each_partition == 0) {
                                 current_partition = try rice.Partition.readPartition(br, coded_residual);
                             }
                             buf[i] = (try current_partition.readNextResidual(br)) << wasted;
@@ -559,7 +578,7 @@ pub const SubFrame = struct {
                 var current_partition = try rice.Partition.readPartition(br, coded_residual);
 
                 for (order..buf.len) |i| {
-                    if (i % number_of_samples_in_each_partition == 0) {
+                    if ((i != 0) and i % number_of_samples_in_each_partition == 0) {
                         current_partition = try rice.Partition.readPartition(br, coded_residual);
                     }
                     var predicted: i64 = 0;

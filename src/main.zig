@@ -45,8 +45,9 @@ pub fn main() !void {
                     metadata_arena.allocator(),
                     block_header.size_of_metadata_block,
                 );
+                _ = seek_table;
 
-                std.debug.print("[{d}] SeekTable Block: {}\n", .{ seek_table.seek_points.len, seek_table });
+                // std.debug.print("[{d}] SeekTable Block: {}\n", .{ seek_table.seek_points.len, seek_table });
             },
             .vorbis_comment => {
                 const vorbis_comment = try lib.metadata.vorbis.VorbisComment.createFromReader(
