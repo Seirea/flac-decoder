@@ -45,9 +45,13 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
         ///  specified number of bits could not be read.
         pub fn readBitsNoEof(self: *@This(), comptime T: type, num: u16) !T {
             const b, const c = try self.readBitsTuple(T, num);
+            // if (num != c) {
+            //     std.debug.print("\n\nstate before:{}\n", .{self});
+            // std.debug.print("wanted: {} | got: {} \nstate:{}\n\n", .{ num, c, self });
+            // }
             if (c < num) return error.EndOfStream;
 
-            std.debug.print("read bits: {X}\n", .{b});
+            // std.debug.print("read bits: {X}\n", .{b});
             return b;
         }
 
@@ -147,20 +151,44 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
             }
 
             const bits_left = num - out_count;
-            const keep = WordSize - bits_left;
 
             if (bits_left == 0) return initBits(T, out, out_count);
 
-            const final_word = self.reader.readInt(Word, .big) catch |err| switch (err) {
-                error.EndOfStream => return initBits(T, out, out_count),
-                else => |e| return e,
-            };
+            // the remainder will be some integer smaller than Word
+            var ob: [@sizeOf(Word)]u8 = undefined;
+
+            // the bytes in the stream are now in ob
+            // try self.reader.readNoEof(&ob);
+            const read_from_stream = try self.reader.readAll(&ob);
+
+            // no more bytes left in the stream
+            if (read_from_stream == 0) {
+                return initBits(T, out, out_count);
+            }
+
+            // std.debug.print("bits_left: {} | read: {}\n", .{ bits_left, read_from_stream });
+            const keep = WordSize - bits_left;
+
+            // std.debug.print("read from stream: {}\n", .{read_from_stream});
+
+            const final_word = std.mem.readInt(Word, &ob, .big);
+            // std.debug.print("final word: {X}\n", .{final_word});
+            // const final_word = std.mem.readInt(Word, @ptrCast(ob[0..read_from_stream]), .big);
+
+            // const final_word = self.reader.readInt(Word, .big) catch |err| switch (err) {
+            //     error.EndOfStream => return initBits(T, out, out_count),
+            //     else => |e| return e,
+            // };
+
+            const extraneous_bits = WordSize - 8 * read_from_stream;
 
             switch (endian) {
                 .big => {
+                    // put the uppermost bits_left bits of final_word into out
                     out <<= @intCast(bits_left);
                     out |= final_word >> @intCast(keep);
-                    self.bits = final_word & low_bit_mask[keep];
+                    //
+                    self.bits = (final_word & low_bit_mask[keep]) >> @intCast(extraneous_bits);
                 },
                 .little => {
                     const pos = @as(U, final_word & low_bit_mask[bits_left]) << @intCast(out_count);
@@ -169,7 +197,7 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
                 },
             }
 
-            self.count = @intCast(keep);
+            self.count = @intCast(keep - extraneous_bits);
             return initBits(T, out, num);
         }
 
@@ -197,8 +225,15 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
         }
 
         pub fn alignToByte(self: *@This()) void {
-            self.bits = 0;
-            self.count = 0;
+            // std.debug.print("{}\n", .{self});
+            // self.bits = 0;
+            // self.count = 0;
+            const byte_amount = self.count >> 3;
+            const destroy_bits = self.count - (byte_amount << 3);
+            // std.debug.print("destroy_bits: {}\n", .{destroy_bits});
+            _ = self.removeBits(destroy_bits);
+            // self.bits = self.bits << @intCast(destroy_bits);
+            // self.count = self.count - destroy_bits;
         }
     };
 }

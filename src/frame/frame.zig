@@ -22,8 +22,6 @@ const crc16 = std.hash.crc.Crc(u16, .{
     .xor_output = 0x0,
 });
 
-pub const AnyBitReader = std.io.BitReader(.big, std.io.AnyReader);
-
 const FrameParsingError = error{
     incorrect_frame_sync,
     missing_zero_bit, // subframe
@@ -132,7 +130,7 @@ pub const Frame = struct {
     sub_frames: []SubFrame,
     footer: u16,
 
-    pub fn parseFrame(reader: cbr.AnyCustomBitReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
+    pub fn parseFrame(reader: *cbr.AnyCustomBitReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
         // const zone = tracy.Zone.begin(.{
         //     .name = "Parse Frame",
         //     .src = @src(),
@@ -141,36 +139,46 @@ pub const Frame = struct {
         // defer zone.end();
         var frame: Frame = undefined;
 
-        var hasher = crc16.init();
-        const crc_writer = CrcWriter(crc16){ .crc_obj = &hasher };
-        var bw = std.io.bitWriter(.big, crc_writer);
-        var crc_reader = ReaderToCRCWriter(crc16).init(reader, &bw);
+        var hasher8 = crc8.init();
+        var hasher16 = crc16.init();
+        const crc8_writer = CrcWriter(crc8){ .crc_obj = &hasher8 };
+        const crc16_writer = CrcWriter(crc16){ .crc_obj = &hasher16 };
 
-        frame.header = try FrameHeader.parseFrameHeader(crc_reader.any());
+        var crc8_bw = std.io.bitWriter(.big, crc8_writer);
+        var crc16_bw = std.io.bitWriter(.big, crc16_writer);
+
+        var crc_reader = ReaderToCRCWriter{
+            .cbr = reader,
+            .bw8 = &crc8_bw,
+            .bw16 = &crc16_bw,
+        };
+
+        frame.header = try FrameHeader.parseFrameHeader(crc_reader);
         const sub_count: u4 = frame.header.channel.channelToNumberOfSubframesMinusOne() + 1;
 
         // std.debug.print("Parsing frame with header: {}\n", .{frame.header});
-
         frame.sub_frames = try alloc.alloc(SubFrame, sub_count);
         for (0..sub_count) |channel_id| {
             frame.sub_frames[channel_id] = try SubFrame.parseSubframe(
-                &crc_reader,
+                crc_reader,
                 alloc,
                 frame.header,
                 stream_info,
                 @intCast(channel_id),
             );
+            // std.debug.print("channel {}\n", .{channel_id});
             // std.debug.print("Subblock {}: {any}\n", .{ channel_id, frame.sub_frames[channel_id] });
             // std.debug.print("Subframe parsed\n\n\n", .{});
         }
 
+        // std.debug.print("checkpoint3\n", .{});
+
         crc_reader.cbr.alignToByte();
 
+        try crc_reader.bw16.flushBits();
+        const fin = crc_reader.bw16.writer.crc_obj.final();
         // read crc
         frame.footer = try crc_reader.cbr.readInt(u16);
-        try crc_reader.bw.flushBits();
-
-        const fin = hasher.final();
         // std.debug.print("Footer says CRC should be: {} | What we got: {}\n", .{ frame.footer, fin });
         // CRC16 Check (return error if failed)
         if (fin != frame.footer) {
@@ -226,7 +234,7 @@ pub const Frame = struct {
     }
 };
 
-pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: anytype) !Enum {
+pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: ReaderToCRCWriter) !Enum {
     const int_representation = @typeInfo(Enum).@"enum".tag_type;
 
     return @enumFromInt(try bit_reader.readBitsNoEof(int_representation, @bitSizeOf(int_representation)));
@@ -241,88 +249,97 @@ pub fn CrcWriter(comptime T: type) type {
             self.crc_obj.update(&out);
 
             // NOTE FROM STANLEY: KEEP THIS IN IT IS VERY USEFUL
-            std.debug.print("wrotebyte: {X} to {}\n", .{ out, self });
+            // std.debug.print("wrotebyte: {X} to {}\n", .{ out, self });
         }
 
         pub fn write(self: *CrcWriter(T), bytes: []const u8) void {
             self.crc_obj.update(bytes);
-            std.debug.print("wrote: {X} to {}\n", .{ bytes, self });
+            // std.debug.print("wrote: {X} to {}\n", .{ bytes, self });
         }
     };
 }
 
-pub fn ReaderToCRCWriter(comptime T: type) type {
-    return struct {
-        // NOTE from Stanley: due to the nature of CustomBitReader, reader MUST NOT BE MIXED WITH cbr
-        // reader: std.io.AnyReader,
-        cbr: cbr.AnyCustomBitReader,
-        bw: *std.io.BitWriter(.big, CrcWriter(T)),
-        pub fn init(cb: cbr.AnyCustomBitReader, bw: *std.io.BitWriter(.big, CrcWriter(T))) ReaderToCRCWriter(T) {
-            return .{
-                .cbr = cb,
-                .bw = bw,
-            };
-        }
+pub const ReaderToCRCWriter = struct {
+    // NOTE from Stanley: due to the nature of CustomBitReader, reader MUST NOT BE MIXED WITH cbr
+    // reader: std.io.AnyReader,
+    cbr: *cbr.AnyCustomBitReader,
+    bw8: *std.io.BitWriter(.big, CrcWriter(crc8)),
+    bw16: *std.io.BitWriter(.big, CrcWriter(crc16)),
 
-        pub fn any(self: *ReaderToCRCWriter(T)) std.io.AnyReader {
-            return .{
-                .context = self,
-                .readFn = typeErasedReadFn,
-            };
-        }
+    // pub fn init(cb: cbr.AnyCustomBitReader, bw: *std.io.BitWriter(.big, CrcWriter(T))) ReaderToCRCWriter(T) {
+    //     return .{
+    //         .cbr = cb,
+    //         .bw = bw,
 
-        pub fn read(self: *ReaderToCRCWriter(T), buffer: []u8) !usize {
-            // const res = try self.cbr.read(buffer);
-            for (0..buffer.len) |i| {
-                buffer[i] = try self.cbr.readBitsNoEof(u8, @bitSizeOf(u8));
-            }
+    //     };
+    // }
 
-            self.bw.writer.write(buffer[0..buffer.len]);
+    // pub fn any(self: *ReaderToCRCWriter(T)) std.io.AnyReader {
+    //     return .{
+    //         .context = self,
+    //         .readFn = typeErasedReadFn,
+    //     };
+    // }
 
-            return buffer.len;
-        }
+    // pub fn read(self: *ReaderToCRCWriter, buffer: []u8) !usize {
+    //     // const res = try self.cbr.read(buffer);
+    //     for (0..buffer.len) |i| {
+    //         buffer[i] = try self.cbr.readBitsNoEof(u8, @bitSizeOf(u8));
+    //     }
 
-        pub fn readByte(self: *ReaderToCRCWriter(T)) !u8 {
-            // return self.any().readByte();
-            return self.cbr.readInt(u8);
-            // var ans: [1]u8 = undefined;
+    //     self.bw8.writer.write(buffer[0..buffer.len]);
+    //     self.bw16.writer.write(buffer[0..buffer.len]);
 
-            // const res = try self.br.readBits(u8, 8, out_bits: *u16)
-            // if (res < 1) return error.EndOfStream;
+    //     return buffer.len;
+    // }
 
-            // self.bw.writer.write(ans);
+    // pub fn readByte(self: *ReaderToCRCWriter) !u8 {
+    //     // return self.any().readByte();
 
-            // return ans[0];
-        }
+    //     const res = self.cbr.readInt(u8);
+    //     self.bw8.writer.writeByte(res);
+    //     self.bw16.writer.writeByte(res);
 
-        pub fn typeErasedReadFn(context: *const anyopaque, buffer: []u8) anyerror!usize {
-            const ptr: *ReaderToCRCWriter(T) = @constCast(@ptrCast(@alignCast(context)));
-            return read(ptr, buffer);
-        }
+    //     return res;
+    //     // var ans: [1]u8 = undefined;
 
-        // fn readBitsNoEof
-        pub fn readBitsNoEof(self: *ReaderToCRCWriter(T), comptime I: type, num: u16) !I {
-            const zone = tracy.Zone.begin(.{
-                .name = std.fmt.comptimePrint("readBits->{s}", .{@typeName(I)}),
-                .src = @src(),
-                .color = .blue,
-            });
-            defer zone.end();
+    //     // const res = try self.br.readBits(u8, 8, out_bits: *u16)
+    //     // if (res < 1) return error.EndOfStream;
 
-            const readed = try self.cbr.readBitsNoEof(I, num);
-            try self.bw.writeBits(readed, num);
+    //     // self.bw.writer.write(ans);
 
-            return readed;
-        }
+    //     // return ans[0];
+    // }
 
-        pub fn readInt(self: *ReaderToCRCWriter(T), comptime I: type) !I {
-            const readed = try self.cbr.readInt(I);
-            try self.bw.writeBits(readed, @bitSizeOf(I));
+    // pub fn typeErasedReadFn(context: *const anyopaque, buffer: []u8) anyerror!usize {
+    //     const ptr: *ReaderToCRCWriter(T) = @constCast(@ptrCast(@alignCast(context)));
+    //     return read(ptr, buffer);
+    // }
 
-            return readed;
-        }
-    };
-}
+    // fn readBitsNoEof
+    pub fn readBitsNoEof(self: ReaderToCRCWriter, comptime I: type, num: u16) !I {
+        const zone = tracy.Zone.begin(.{
+            .name = std.fmt.comptimePrint("readBits->{s}", .{@typeName(I)}),
+            .src = @src(),
+            .color = .blue,
+        });
+        defer zone.end();
+
+        const readed = try self.cbr.readBitsNoEof(I, num);
+        try self.bw8.writeBits(readed, num);
+        try self.bw16.writeBits(readed, num);
+
+        return readed;
+    }
+
+    pub fn readInt(self: ReaderToCRCWriter, comptime I: type) !I {
+        const readed = try self.cbr.readInt(I);
+        try self.bw8.writeBits(readed, @bitSizeOf(I));
+        try self.bw16.writeBits(readed, @bitSizeOf(I));
+
+        return readed;
+    }
+};
 pub const FrameHeader = struct {
     blocking_strategy: bool, // 0 is fixed block size, 1 is variable
     block_size: u16,
@@ -333,18 +350,13 @@ pub const FrameHeader = struct {
     coded_number: u36,
     crc: u8,
 
-    pub fn parseFrameHeader(reader: cbr.AnyCustomBitReader) !FrameHeader {
+    pub fn parseFrameHeader(crc_reader: ReaderToCRCWriter) !FrameHeader {
         // const zone = tracy.Zone.begin(.{
         //     .name = "Parse Frame Header",
         //     .src = @src(),
         //     .color = .blue,
         // });
         // defer zone.end();
-        var hasher = crc8.init();
-        const crc_writer = CrcWriter(crc8){ .crc_obj = &hasher };
-        var bw = std.io.bitWriter(.big, crc_writer);
-        var crc_reader = ReaderToCRCWriter(crc8).init(reader, &bw);
-
         var frame_header: FrameHeader = undefined;
         frame_header.unusual_sample_rate = null;
 
@@ -354,16 +366,16 @@ pub const FrameHeader = struct {
 
         frame_header.blocking_strategy = try crc_reader.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
 
-        const bs = try readCustomIntToEnum(ParsingBlockSize, &crc_reader);
-        frame_header.sample_rate = try readCustomIntToEnum(ParsingSampleRate, &crc_reader);
-        frame_header.channel = try readCustomIntToEnum(Channel, &crc_reader);
-        frame_header.bit_depth = try readCustomIntToEnum(BitDepth, &crc_reader);
+        const bs = try readCustomIntToEnum(ParsingBlockSize, crc_reader);
+        frame_header.sample_rate = try readCustomIntToEnum(ParsingSampleRate, crc_reader);
+        frame_header.channel = try readCustomIntToEnum(Channel, crc_reader);
+        frame_header.bit_depth = try readCustomIntToEnum(BitDepth, crc_reader);
 
         if (try crc_reader.readBitsNoEof(u1, 1) != 0) {
             return error.using_reserved_value;
         }
 
-        frame_header.coded_number = try decodeNumber(&crc_reader);
+        frame_header.coded_number = try decodeNumber(crc_reader);
 
         // we should be aligned at this point
         frame_header.block_size = switch (bs) {
@@ -404,13 +416,13 @@ pub const FrameHeader = struct {
             else => {},
         }
 
-        try crc_reader.bw.flushBits();
+        try crc_reader.bw8.flushBits();
 
-        const fin = hasher.final();
         // std.debug.print("frame header: {}\n", .{frame_header});
         // std.debug.print("crc8: {}, {b}\n", .{ hasher.final(), crc_reader.bw.bits });
+        const fin = crc_reader.bw8.writer.crc_obj.final();
         frame_header.crc = try crc_reader.readInt(u8);
-        std.debug.print("header crc8: {} | we got: {}\n", .{ frame_header.crc, fin });
+        // std.debug.print("header crc8: {} | we got: {}\n", .{ frame_header.crc, fin });
 
         // CRC Check (return error if failed)
         if (fin != frame_header.crc) {
@@ -435,7 +447,7 @@ pub const SubFrame = struct {
     wasted_bits: u5,
     subblock: []i32,
 
-    pub fn parseSubframe(br: anytype, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
+    pub fn parseSubframe(br: ReaderToCRCWriter, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
         // const zone = tracy.Zone.begin(.{
         //     .name = "Parse SUB Frame",
         //     .src = @src(),
@@ -463,12 +475,15 @@ pub const SubFrame = struct {
         subframe.wasted_bits = 0;
 
         if (try br.readBitsNoEof(u1, 1) == 1) {
+            // std.debug.print("starting unary\n", .{});
             var num: u5 = 1;
 
             // TODO: OPTIMIZE WITH BETTER unary
             while (try br.readBitsNoEof(u1, 1) == 0) : (num += 1) {}
             subframe.wasted_bits = num;
         }
+
+        // std.debug.print("ended unary: {}\n", .{subframe.wasted_bits});
 
         // std.debug.print("BR 3: {}, {}\n", .{ br, br.reader.context });
         const bit_depth_minus_one = try frame.bit_depth.asIntMinusOne(stream_info);
@@ -495,11 +510,13 @@ pub const SubFrame = struct {
         // const verbatim_int_type = std.meta.Int(.signed, real_bit_depth);
         const decoded_sample_type = i32;
 
+        // std.debug.print("checkpoint0\n", .{});
         const subblock_zone = tracy.Zone.begin(.{
             .name = "Subblock Parse",
             .src = @src(),
             .color = .pink,
         });
+
         subframe.subblock = switch (subframe.header) {
             .constant => blk: {
                 const buf = try alloc.alloc(decoded_sample_type, frame.block_size);
@@ -654,7 +671,7 @@ pub const SubFrame = struct {
     }
 };
 
-pub fn decodeNumber(reader: anytype) !u36 {
+pub fn decodeNumber(reader: ReaderToCRCWriter) !u36 {
     var ret: u36 = 0;
     const first = try reader.readInt(u8);
 
