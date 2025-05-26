@@ -53,6 +53,14 @@ pub fn build(b: *std.Build) void {
         .root_module = lib_mod,
     });
 
+    // Get the Tracy dependency
+    const tracy = b.dependency("tracy", .{
+        .target = target,
+        .optimize = optimize,
+        // ...
+    });
+    lib.root_module.addImport("tracy", tracy.module("tracy"));
+
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
@@ -65,6 +73,24 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
+    const tracy_enabled = b.option(
+        bool,
+        "tracy",
+        "Build with Tracy support.",
+    ) orelse false;
+
+    // Make Tracy available as an import
+    exe.root_module.addImport("tracy", tracy.module("tracy"));
+
+    // Pick an implementation based on the build flags.
+    // Don't build both, we don't want to link with Tracy at all unless we intend to enable it.
+    if (tracy_enabled) {
+        // The user asked to enable Tracy, use the real implementation
+        exe.root_module.addImport("tracy_impl", tracy.module("tracy_impl_enabled"));
+    } else {
+        // The user asked to disable Tracy, use the dummy implementation
+        exe.root_module.addImport("tracy_impl", tracy.module("tracy_impl_disabled"));
+    }
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).

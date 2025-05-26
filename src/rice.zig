@@ -1,6 +1,8 @@
 const std = @import("std");
+const tracy = @import("tracy");
 const frame = @import("frame/frame.zig");
 const util = @import("util.zig");
+
 pub const ParameterSize = enum {
     @"4-bits",
     @"5-bits",
@@ -37,6 +39,11 @@ pub const Partition = struct {
     parameter: u5,
 
     pub fn readPartition(br: anytype, residual: CodedResidual) !Partition {
+        const partition_zone = tracy.Zone.begin(.{
+            .name = "READ partition",
+            .src = @src(),
+            .color = .white,
+        });
         const param: u5 = switch (residual.parameter_size) {
             .@"4-bits" => try br.readBitsNoEof(u5, 4),
             .@"5-bits" => try br.readBitsNoEof(u5, 5),
@@ -47,13 +54,21 @@ pub const Partition = struct {
             .@"5-bits" => param == 0b11111,
         };
 
-        return .{
+        const ret = Partition{
             .parameter = if (escape) try br.readBitsNoEof(u5, 5) else param,
             .escaped = escape,
         };
+        partition_zone.end();
+        return ret;
     }
 
     pub fn readNextResidual(partition: Partition, br: anytype) !i32 {
+        const zone = tracy.Zone.begin(.{
+            .name = "readNextResidual",
+            .src = @src(),
+            .color = .green,
+        });
+        defer zone.end();
         if (partition.escaped) {
             if (partition.parameter == 0) {
                 return 0;
