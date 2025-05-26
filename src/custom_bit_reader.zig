@@ -7,19 +7,19 @@ pub const AnyCustomBitReader = CustomBitReader(.big, WordType, std.io.AnyReader)
 /// Not tested with Little Endian
 pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type, comptime Reader: type) type {
     return struct {
-        const CountType = std.meta.Int(.unsigned, std.math.log2(WordSize) + 1);
-        const WordSize = @bitSizeOf(Word);
+        const CountType = std.meta.Int(.unsigned, std.math.log2(WordSizeInBits) + 1);
+        const WordSizeInBits = @bitSizeOf(Word);
         reader: Reader,
         bits: Word = 0,
         count: CountType = 0,
 
         // generate a low_bit_mask at comptime based on our custom Word size
         const low_bit_mask = blk: {
-            var x: [WordSize + 1]Word = undefined;
-            for (0..WordSize) |i| {
+            var x: [WordSizeInBits + 1]Word = undefined;
+            for (0..WordSizeInBits) |i| {
                 x[i] = (@as(Word, 1) << i) - 1;
             }
-            x[WordSize] = ~@as(Word, 0);
+            x[WordSizeInBits] = ~@as(Word, 0);
 
             // @compileLog(std.fmt.comptimePrint("{b}\n", .{x}));
             break :blk x;
@@ -67,6 +67,52 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
         pub fn readInt(self: *@This(), comptime T: type) anyerror!T {
             // std.debug.print("reading int\n", .{});
             return self.readBitsNoEof(T, @bitSizeOf(T));
+        }
+
+        pub fn readUnary(self: *@This()) !u32 {
+            // check if what we have in the buffer already is unary
+            const extraneous_bits = WordSizeInBits - self.count;
+            var leading_zeroes = if (self.count != 0) @clz(self.bits << @intCast(extraneous_bits)) else self.count;
+
+            if (leading_zeroes < self.count) {
+                // inspected unary already in buffer
+                _ = self.removeBits(leading_zeroes + 1);
+                return leading_zeroes;
+            } else {
+                // inspected more than in buffer, so we need to continue looking
+                leading_zeroes = self.count;
+
+                // clean out our internal buffer
+                self.bits = 0;
+                self.count = 0;
+
+                var ob: [@sizeOf(Word)]u8 = undefined;
+                while (true) {
+                    // const next = try self.readBitsTuple(Word, @bitSizeOf(Word));
+
+                    // get next Word from stream
+                    const read_from_stream = try self.reader.readAll(&ob);
+
+                    // there is nothing left in the stream
+                    if (read_from_stream == 0) {
+                        return leading_zeroes;
+                    }
+
+                    const new_count = read_from_stream * 8;
+                    const extraneous_bits_from_reader: u6 = @intCast(WordSizeInBits - new_count);
+                    const final_bits = std.mem.readInt(Word, &ob, .big) >> @intCast(extraneous_bits_from_reader);
+                    const leading_zeroes_now = @clz(final_bits << extraneous_bits_from_reader);
+
+                    leading_zeroes += leading_zeroes_now;
+                    // leading_zeroes += leading_zeroes_in_fresh;
+                    if (leading_zeroes_now < new_count) {
+                        // we stopped
+                        self.count = @intCast(new_count - (leading_zeroes_now + 1));
+                        self.bits = final_bits & low_bit_mask[self.count];
+                        return leading_zeroes;
+                    }
+                }
+            }
         }
 
         // pub fn read(self: *@This(), buf: []u8) !usize {
@@ -117,7 +163,7 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
         ///  read. Reaching the end of the stream is not an error.
         pub fn readBitsTuple(self: *@This(), comptime T: type, num: u16) !Bits(T) {
             const UT = std.meta.Int(.unsigned, @bitSizeOf(T));
-            const U = if (@bitSizeOf(T) < WordSize) Word else UT; //it is a pain to work with <u8
+            const U = if (@bitSizeOf(T) < WordSizeInBits) Word else UT; //it is a pain to work with <u8
 
             //dump any bits in our buffer first
             if (num <= self.count) return initBits(T, self.removeBits(@intCast(num)), num);
@@ -128,7 +174,7 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
             //grab all the full bytes we need and put their
             //bits where they belong
 
-            const full_words_left = (num - out_count) / WordSize;
+            const full_words_left = (num - out_count) / WordSizeInBits;
 
             for (0..full_words_left) |_| {
                 const word = self.reader.readInt(Word, .big) catch |err| switch (err) {
@@ -139,7 +185,7 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
                 switch (endian) {
                     .big => {
                         // TODO: revise this
-                        if (U == Word) out = 0 else out <<= WordSize; //shifting u8 by 8 is illegal in Zig
+                        if (U == Word) out = 0 else out <<= WordSizeInBits; //shifting u8 by 8 is illegal in Zig
                         out |= word;
                     },
                     .little => {
@@ -147,7 +193,7 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
                         out |= pos;
                     },
                 }
-                out_count += WordSize;
+                out_count += WordSizeInBits;
             }
 
             const bits_left = num - out_count;
@@ -167,7 +213,7 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
             }
 
             // std.debug.print("bits_left: {} | read: {}\n", .{ bits_left, read_from_stream });
-            const keep = WordSize - bits_left;
+            const keep = WordSizeInBits - bits_left;
 
             // std.debug.print("read from stream: {}\n", .{read_from_stream});
 
@@ -180,7 +226,7 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
             //     else => |e| return e,
             // };
 
-            const extraneous_bits = WordSize - 8 * read_from_stream;
+            const extraneous_bits = WordSizeInBits - 8 * read_from_stream;
 
             switch (endian) {
                 .big => {
@@ -191,9 +237,10 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
                     self.bits = (final_word & low_bit_mask[keep]) >> @intCast(extraneous_bits);
                 },
                 .little => {
-                    const pos = @as(U, final_word & low_bit_mask[bits_left]) << @intCast(out_count);
-                    out |= pos;
-                    self.bits = final_word >> @intCast(bits_left);
+                    @compileError("Little endian CustomBitReader is not implemented");
+                    // const pos = @as(U, final_word & low_bit_mask[bits_left]) << @intCast(out_count);
+                    // out |= pos;
+                    // self.bits = final_word >> @intCast(bits_left);
                 },
             }
 
@@ -205,7 +252,7 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
         //the appropriate part of the buffer based on
         //endianess.
         fn removeBits(self: *@This(), num: CountType) Word {
-            if (num == WordSize) {
+            if (num == WordSizeInBits) {
                 self.count = 0;
                 return self.bits;
             }

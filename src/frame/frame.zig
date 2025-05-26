@@ -250,6 +250,7 @@ pub fn CrcWriter(comptime T: type) type {
 
             // NOTE FROM STANLEY: KEEP THIS IN IT IS VERY USEFUL
             // std.debug.print("wrotebyte: {X} to {}\n", .{ out, self });
+            // std.debug.print("wrotebyte: {X}\n", .{out});
         }
 
         pub fn write(self: *CrcWriter(T), bytes: []const u8) void {
@@ -330,6 +331,17 @@ pub const ReaderToCRCWriter = struct {
         try self.bw16.writeBits(readed, num);
 
         return readed;
+    }
+
+    pub fn readUnary(self: ReaderToCRCWriter) !u32 {
+        const read = try self.cbr.readUnary();
+
+        // std.debug.print("Writing {} unary bits\n", .{read + 1});
+
+        try self.bw8.writeBits(@as(cbr.WordType, 1), @intCast(read + 1));
+        try self.bw16.writeBits(@as(cbr.WordType, 1), @intCast(read + 1));
+
+        return read;
     }
 
     pub fn readInt(self: ReaderToCRCWriter, comptime I: type) !I {
@@ -473,14 +485,8 @@ pub const SubFrame = struct {
         };
 
         subframe.wasted_bits = 0;
-
         if (try br.readBitsNoEof(u1, 1) == 1) {
-            // std.debug.print("starting unary\n", .{});
-            var num: u5 = 1;
-
-            // TODO: OPTIMIZE WITH BETTER unary
-            while (try br.readBitsNoEof(u1, 1) == 0) : (num += 1) {}
-            subframe.wasted_bits = num;
+            subframe.wasted_bits = @intCast(try br.readUnary() + 1);
         }
 
         // std.debug.print("ended unary: {}\n", .{subframe.wasted_bits});
@@ -549,8 +555,6 @@ pub const SubFrame = struct {
 
                 const coded_residual = try rice.CodedResidual.readCodedResidual(br);
                 // std.debug.print("coded residual ->: {}\n", .{coded_residual});
-                const number_of_samples_in_each_partition = frame.block_size >> coded_residual.order;
-                var current_partition = try rice.Partition.readPartition(br, coded_residual);
 
                 // std.debug.print("first partition: {}\n", .{current_partition});
 
@@ -559,51 +563,38 @@ pub const SubFrame = struct {
                 //     .src = @src(),
                 //     .color = .white,
                 // });
+                try rice.readRicePartitionsIntoResidualBuffer(
+                    br,
+                    frame.block_size,
+                    order,
+                    coded_residual,
+                    buf,
+                );
+
                 switch (order) {
-                    0 => {
-                        // read remaining samples
-                        for (order..buf.len) |i| {
-                            // NOTE FROM STANLEY: DO NOT START A NEW PARTITION IF i == 0, BECAUSE WE ALREADY STARTED A PARTITION FOR THIS ONE
-                            if ((i != 0) and i % number_of_samples_in_each_partition == 0) {
-                                current_partition = try rice.Partition.readPartition(br, coded_residual);
-                            }
-                            buf[i] = (try current_partition.readNextResidual(br)) << wasted;
-                        }
-                    },
+                    0 => {},
                     1 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            if (i % number_of_samples_in_each_partition == 0) {
-                                current_partition = try rice.Partition.readPartition(br, coded_residual);
-                            }
-                            buf[i] = (buf[i - 1] + try current_partition.readNextResidual(br)) << wasted;
+                            buf[i] = (buf[i - 1] + buf[i]) << wasted;
                         }
                     },
                     2 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            if (i % number_of_samples_in_each_partition == 0) {
-                                current_partition = try rice.Partition.readPartition(br, coded_residual);
-                            }
-                            buf[i] = @intCast((2 * @as(i64, buf[i - 1]) - @as(i64, buf[i - 2]) + try current_partition.readNextResidual(br)) << wasted);
+                            buf[i] = @intCast((2 * @as(i64, buf[i - 1]) - @as(i64, buf[i - 2]) + buf[i]) << wasted);
                         }
                     },
                     3 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            if (i % number_of_samples_in_each_partition == 0) {
-                                current_partition = try rice.Partition.readPartition(br, coded_residual);
-                            }
-                            buf[i] = @intCast((3 * @as(i64, buf[i - 1]) - 3 * @as(i64, buf[i - 2]) + @as(i64, buf[i - 3]) + try current_partition.readNextResidual(br)) << wasted);
+                            buf[i] = @intCast((3 * @as(i64, buf[i - 1]) - 3 * @as(i64, buf[i - 2]) + @as(i64, buf[i - 3]) + buf[i]) << wasted);
                         }
                     },
                     4 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            if (i % number_of_samples_in_each_partition == 0) {
-                                current_partition = try rice.Partition.readPartition(br, coded_residual);
-                            }
-                            buf[i] = @intCast((4 * @as(i64, buf[i - 1]) - 6 * @as(i64, buf[i - 2]) + 4 * @as(i64, buf[i - 3]) - @as(i64, buf[i - 4]) + try current_partition.readNextResidual(br)) << wasted);
+                            buf[i] = @intCast((4 * @as(i64, buf[i - 1]) - 6 * @as(i64, buf[i - 2]) + 4 * @as(i64, buf[i - 3]) - @as(i64, buf[i - 4]) + buf[i]) << wasted);
                         }
                     },
                     else => {
@@ -638,28 +629,23 @@ pub const SubFrame = struct {
                 }
 
                 const coded_residual = try rice.CodedResidual.readCodedResidual(br);
-                const number_of_samples_in_each_partition = frame.block_size >> coded_residual.order;
 
-                var current_partition = try rice.Partition.readPartition(br, coded_residual);
+                try rice.readRicePartitionsIntoResidualBuffer(
+                    br,
+                    frame.block_size,
+                    order,
+                    coded_residual,
+                    buf,
+                );
 
-                const partition_zone = tracy.Zone.begin(.{
-                    .name = "Parse partition",
-                    .src = @src(),
-                    .color = .white,
-                });
                 for (order..buf.len) |i| {
-                    if ((i != 0) and i % number_of_samples_in_each_partition == 0) {
-                        current_partition = try rice.Partition.readPartition(br, coded_residual);
-                    }
-
                     var predicted: i64 = 0;
                     for (0..order) |x| {
                         predicted += @as(i64, @intCast(coefficients[x])) * buf[i - x - 1];
                     }
 
-                    buf[i] = @intCast(((predicted >> @intCast(prediction_right_shift)) + try current_partition.readNextResidual(br)) << wasted);
+                    buf[i] = @intCast(((predicted >> @intCast(prediction_right_shift)) + buf[i]) << wasted);
                 }
-                partition_zone.end();
 
                 break :blk buf;
             },

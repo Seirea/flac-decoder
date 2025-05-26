@@ -37,7 +37,7 @@ pub fn main() !void {
         .color = .tomato,
     });
     defer zone.end();
-    const file = try std.fs.cwd().openFile("test/example_3.flac", .{});
+    const file = try std.fs.cwd().openFile("test/test.flac", .{});
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
 
@@ -187,6 +187,7 @@ pub fn main() !void {
         error.EndOfStream => null,
         else => |er| return er,
     }) |x| {
+        // _ = x;
         // std.debug.print("Channel: {}\n", .{x.header.channel});
         // std.debug.print("SUBFRAMES: {any}\n", .{x.sub_frames});
         for (0..x.header.block_size) |sample| {

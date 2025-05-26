@@ -45,19 +45,19 @@ pub fn readTwosComplementIntegerOfSetBits(br: frame.ReaderToCRCWriter, comptime 
 // self.count = 1
 // return 1
 
-pub fn readUnary(br: *cbr.CustomBitReader(.big, frame.Word, std.io.AnyReader)) !frame.Word {
-    var ret: frame.Word = 0;
-    while (true) {
-        const bits_read = try br.readBitsTuple(frame.Word, @bitSizeOf(frame.Word));
-        const lz = @clz(bits_read.@"0");
-        if (bits_read.@"0" > 0) {
-            // we read something
-            //
-            ret += lz;
-            return ret;
-        } else {
-            // we must keep reading
-            ret += @bitSizeOf(frame.Word);
-        }
-    }
-}
+// pub fn readUnary(br: *cbr.CustomBitReader(.big, frame.Word, std.io.AnyReader)) !frame.Word {
+//     var ret: frame.Word = 0;
+//     while (true) {
+//         const bits_read = try br.readBitsTuple(frame.Word, @bitSizeOf(frame.Word));
+//         const lz = @clz(bits_read.@"0");
+//         if (bits_read.@"0" > 0) {
+//             // we read something
+//             //
+//             ret += lz;
+//             return ret;
+//         } else {
+//             // we must keep reading
+//             ret += @bitSizeOf(frame.Word);
+//         }
+//     }
+// }

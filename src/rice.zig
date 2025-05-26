@@ -97,23 +97,73 @@ pub const Partition = struct {
 };
 //
 
-// pub fn readRiceSignedBlock(br: anytype, , nvals: usize, partition_parameter: usize, residuals: []i32) {
+pub inline fn unfold_residual(res: u32) i32 {
+    // for more information: https://docs.rs/residua-zigzag/latest/zigzag/
+    return @as(i32, @intCast(res >> 1)) ^ -@as(i32, @intCast(res & 1));
+}
 
-// }
+test "check fold residual" {
+    const expecteq = std.testing.expectEqual;
 
-pub fn readRicePartitionsIntoResidualBuffer(br: anytype, block_size: u16, predictor_order: u6, coded_residual: CodedResidual, residuals: []i32) !void {
-    const num_partitions: u16 = 1 << coded_residual.order;
+    try expecteq(0, unfold_residual(0));
+    try expecteq(-1, unfold_residual(1));
+    try expecteq(1, unfold_residual(2));
+    try expecteq(-2, unfold_residual(3));
+    try expecteq(2, unfold_residual(4));
+
+    try expecteq(unfold_residual(6388), 3194);
+    try expecteq(unfold_residual(2593), -1297);
+    try expecteq(unfold_residual(2456), 1228);
+    try expecteq(unfold_residual(1885), -943);
+    try expecteq(unfold_residual(1904), 952);
+    try expecteq(unfold_residual(1391), -696);
+    try expecteq(unfold_residual(1536), 768);
+    try expecteq(unfold_residual(1047), -524);
+    try expecteq(unfold_residual(1198), 599);
+    try expecteq(unfold_residual(801), -401);
+    try expecteq(unfold_residual(26343), -13172);
+    try expecteq(unfold_residual(631), -316);
+    try expecteq(unfold_residual(548), 274);
+    try expecteq(unfold_residual(533), -267);
+    try expecteq(unfold_residual(268), 134);
+}
+
+pub fn readRiceSignedBlock(br: frame.ReaderToCRCWriter, vals: []i32, partition_parameter: u5) !void {
+    if (partition_parameter == 0) {
+        //
+        for (0..vals.len) |i| {
+            const quotient = try br.readUnary();
+            vals[i] = unfold_residual(quotient);
+        }
+        return;
+    }
+
+    for (0..vals.len) |i| {
+        const quotient = try br.readUnary();
+        const remainder = try br.readBitsNoEof(u32, partition_parameter);
+        vals[i] = unfold_residual((quotient << partition_parameter) | remainder);
+    }
+    return;
+}
+
+pub fn readRicePartitionsIntoResidualBuffer(br: frame.ReaderToCRCWriter, block_size: u16, predictor_order: u6, coded_residual: CodedResidual, residuals: []i32) !void {
+    const num_partitions: u16 = @as(u16, 1) << coded_residual.order;
     const number_of_samples_per_partition = block_size >> coded_residual.order;
 
-    var current_sample = predictor_order;
+    var current_sample: u16 = predictor_order;
 
     for (0..num_partitions) |partition_idx| {
-        const current_partition = Partition.readPartition(br, coded_residual);
+        const current_partition = try Partition.readPartition(br, coded_residual);
         const number_of_samples_in_this_partition = if (partition_idx == 0) number_of_samples_per_partition - predictor_order else number_of_samples_per_partition;
 
         if (!current_partition.escaped) {
             // not escaped partition
             // process the next N samples
+            try readRiceSignedBlock(
+                br,
+                residuals[current_sample..(current_sample + number_of_samples_in_this_partition)],
+                current_partition.parameter,
+            );
 
             current_sample += number_of_samples_in_this_partition;
         } else {
