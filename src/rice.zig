@@ -96,3 +96,46 @@ pub const Partition = struct {
     }
 };
 //
+
+// pub fn readRiceSignedBlock(br: anytype, , nvals: usize, partition_parameter: usize, residuals: []i32) {
+
+// }
+
+pub fn readRicePartitionsIntoResidualBuffer(br: anytype, block_size: u16, predictor_order: u6, coded_residual: CodedResidual, residuals: []i32) !void {
+    const num_partitions: u16 = 1 << coded_residual.order;
+    const number_of_samples_per_partition = block_size >> coded_residual.order;
+
+    var current_sample = predictor_order;
+
+    for (0..num_partitions) |partition_idx| {
+        const current_partition = Partition.readPartition(br, coded_residual);
+        const number_of_samples_in_this_partition = if (partition_idx == 0) number_of_samples_per_partition - predictor_order else number_of_samples_per_partition;
+
+        if (!current_partition.escaped) {
+            // not escaped partition
+            // process the next N samples
+
+            current_sample += number_of_samples_in_this_partition;
+        } else {
+            // escaped partition
+
+            if (current_partition.parameter == 0) {
+                // all zeroes
+                @memset(residuals[current_sample..(current_sample + number_of_samples_in_this_partition)], 0);
+
+                current_sample += number_of_samples_in_this_partition;
+            } else {
+                // read the escaped values as twos complement into residual
+                for (0..number_of_samples_in_this_partition) |_| {
+                    residuals[current_sample] = try util.readTwosComplementIntegerOfSetBits(
+                        br,
+                        i32,
+                        current_partition.parameter,
+                    );
+
+                    current_sample += 1;
+                }
+            }
+        }
+    }
+}

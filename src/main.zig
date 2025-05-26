@@ -5,6 +5,8 @@ const builtin = @import("builtin");
 // If `tracy_impl` is not set in your root file, Tracy integration will be disabled.
 pub const tracy_impl = @import("tracy_impl");
 
+pub const cbr = lib.custom_bit_reader;
+
 // You can optionally configure Tracy by setting `tracy_options` in your root file.
 pub const tracy = @import("tracy");
 pub const tracy_options: tracy.Options = .{
@@ -35,7 +37,7 @@ pub fn main() !void {
         .color = .tomato,
     });
     defer zone.end();
-    const file = try std.fs.cwd().openFile("test/06 Honey Bee.flac", .{});
+    const file = try std.fs.cwd().openFile("test/example_3.flac", .{});
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
 
@@ -175,7 +177,12 @@ pub fn main() !void {
 
     var frame_arena = std.heap.ArenaAllocator.init(allocator);
 
-    while (lib.frame.Frame.parseFrame(file_reader.any(), frame_arena.allocator(), streaminfo_saved) catch |err| switch (err) {
+    const custom_bit_reader = cbr.customBitReader(.big, lib.custom_bit_reader.WordType, file_reader.any());
+    while (lib.frame.Frame.parseFrame(
+        custom_bit_reader,
+        frame_arena.allocator(),
+        streaminfo_saved,
+    ) catch |err| switch (err) {
         error.EndOfStream => null,
         else => |er| return er,
     }) |x| {
