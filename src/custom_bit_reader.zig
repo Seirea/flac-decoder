@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 
 pub const WordType = usize;
 pub const AnyCustomBitReader = CustomBitReader(.big, WordType, std.io.AnyReader);
@@ -70,17 +71,20 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
         }
 
         pub fn readUnary(self: *@This()) !u32 {
+            const zone = tracy.ZoneN(@src(), "read unary");
+            defer zone.End();
+
             // check if what we have in the buffer already is unary
             const extraneous_bits = WordSizeInBits - self.count;
-            var leading_zeroes = if (self.count != 0) @clz(self.bits << @intCast(extraneous_bits)) else self.count;
+            const leading_zeroes = if (self.count != 0) @clz(self.bits << @intCast(extraneous_bits)) else self.count;
 
             if (leading_zeroes < self.count) {
                 // inspected unary already in buffer
                 _ = self.removeBits(leading_zeroes + 1);
                 return leading_zeroes;
             } else {
+                var out: u32 = self.count;
                 // inspected more than in buffer, so we need to continue looking
-                leading_zeroes = self.count;
 
                 // clean out our internal buffer
                 self.bits = 0;
@@ -103,13 +107,13 @@ pub fn CustomBitReader(comptime endian: std.builtin.Endian, comptime Word: type,
                     const final_bits = std.mem.readInt(Word, &ob, .big) >> @intCast(extraneous_bits_from_reader);
                     const leading_zeroes_now = @clz(final_bits << extraneous_bits_from_reader);
 
-                    leading_zeroes += leading_zeroes_now;
+                    out += leading_zeroes_now;
                     // leading_zeroes += leading_zeroes_in_fresh;
                     if (leading_zeroes_now < new_count) {
                         // we stopped
                         self.count = @intCast(new_count - (leading_zeroes_now + 1));
                         self.bits = final_bits & low_bit_mask[self.count];
-                        return leading_zeroes;
+                        return out;
                     }
                 }
             }

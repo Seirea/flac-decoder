@@ -2,42 +2,20 @@ const std = @import("std");
 const lib = @import("flac_decoder_lib");
 const builtin = @import("builtin");
 
-// If `tracy_impl` is not set in your root file, Tracy integration will be disabled.
-pub const tracy_impl = @import("tracy_impl");
-
 pub const cbr = lib.custom_bit_reader;
 
-// You can optionally configure Tracy by setting `tracy_options` in your root file.
-pub const tracy = @import("tracy");
-pub const tracy_options: tracy.Options = .{
-    .on_demand = false,
-    .no_broadcast = false,
-    .only_localhost = false,
-    .only_ipv4 = false,
-    .delayed_init = false,
-    .manual_lifetime = false,
-    .verbose = false,
-    .data_port = null,
-    .broadcast_port = null,
-    .default_callstack_depth = 20,
-};
+const tracy = @import("tracy");
 
 pub const Signature = extern struct {
     sig: [4]u8,
 };
 
-var tracy_allocator = tracy.Allocator{ .parent = std.heap.smp_allocator };
+var tracy_allocator = tracy.TracyAllocator.init(std.heap.smp_allocator);
 
 pub fn main() !void {
     var allocator = tracy_allocator.allocator();
 
-    const zone = tracy.Zone.begin(.{
-        .name = "Main",
-        .src = @src(),
-        .color = .tomato,
-    });
-    defer zone.end();
-    const file = try std.fs.cwd().openFile("test/test.flac", .{});
+    const file = try std.fs.cwd().openFile("test/16 Monodrama.flac", .{});
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
 
@@ -154,7 +132,7 @@ pub fn main() !void {
     const header_size = 36;
     try stdout.writeInt(
         u32,
-        header_size + num_of_samples * nchannels * (bit_depth / 8),
+        header_size + num_of_samples * nchannels * (bit_depth >> 3),
         std.builtin.Endian.little,
     );
     try stdout.writeAll("WAVE");
@@ -164,14 +142,14 @@ pub fn main() !void {
     try stdout.writeInt(u16, 1, std.builtin.Endian.little);
     try stdout.writeInt(u16, nchannels, std.builtin.Endian.little);
     try stdout.writeInt(u32, samplerate, std.builtin.Endian.little);
-    const blockAlign = nchannels * (bit_depth / 8);
+    const blockAlign = nchannels * (bit_depth >> 3);
     try stdout.writeInt(u32, blockAlign * samplerate, std.builtin.Endian.little);
     try stdout.writeInt(u16, blockAlign, std.builtin.Endian.little);
     try stdout.writeInt(u16, bit_depth, std.builtin.Endian.little);
     try stdout.writeAll("data");
     try stdout.writeInt(
         u32,
-        num_of_samples * nchannels * (bit_depth / 8),
+        num_of_samples * nchannels * (bit_depth >> 3),
         std.builtin.Endian.little,
     );
 
@@ -189,7 +167,7 @@ pub fn main() !void {
     }) |x| {
         // _ = x;
         // std.debug.print("Channel: {}\n", .{x.header.channel});
-        // std.debug.print("SUBFRAMES: {any}\n", .{x.sub_frames});
+        std.debug.print("SUBFRAMES: {any}\n", .{x.sub_frames});
         for (0..x.header.block_size) |sample| {
             for (x.sub_frames) |subframe| {
                 try stdout.writeInt(

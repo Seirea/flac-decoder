@@ -131,12 +131,6 @@ pub const Frame = struct {
     footer: u16,
 
     pub fn parseFrame(reader: *cbr.AnyCustomBitReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
-        // const zone = tracy.Zone.begin(.{
-        //     .name = "Parse Frame",
-        //     .src = @src(),
-        //     .color = .blue,
-        // });
-        // defer zone.end();
         var frame: Frame = undefined;
 
         var hasher8 = crc8.init();
@@ -319,12 +313,11 @@ pub const ReaderToCRCWriter = struct {
 
     // fn readBitsNoEof
     pub fn readBitsNoEof(self: ReaderToCRCWriter, comptime I: type, num: u16) !I {
-        const zone = tracy.Zone.begin(.{
-            .name = std.fmt.comptimePrint("readBits->{s}", .{@typeName(I)}),
-            .src = @src(),
-            .color = .blue,
-        });
-        defer zone.end();
+        const tracy_zone = tracy.ZoneN(
+            @src(),
+            std.fmt.comptimePrint("readBits->{s}", .{@typeName(I)}),
+        );
+        defer tracy_zone.End();
 
         const readed = try self.cbr.readBitsNoEof(I, num);
         try self.bw8.writeBits(readed, num);
@@ -338,8 +331,15 @@ pub const ReaderToCRCWriter = struct {
 
         // std.debug.print("Writing {} unary bits\n", .{read + 1});
 
-        try self.bw8.writeBits(@as(cbr.WordType, 1), @intCast(read + 1));
-        try self.bw16.writeBits(@as(cbr.WordType, 1), @intCast(read + 1));
+        const bytes_to_write = read >> 3;
+        for (0..bytes_to_write) |_| {
+            try self.bw8.writeBits(@as(u8, 0), 8);
+            try self.bw16.writeBits(@as(u8, 0), 8);
+        }
+
+        const remaining_bits: u4 = @intCast(read - (bytes_to_write << 3));
+        try self.bw8.writeBits(@as(u8, 1), remaining_bits + 1);
+        try self.bw16.writeBits(@as(u8, 1), remaining_bits + 1);
 
         return read;
     }
@@ -363,12 +363,6 @@ pub const FrameHeader = struct {
     crc: u8,
 
     pub fn parseFrameHeader(crc_reader: ReaderToCRCWriter) !FrameHeader {
-        // const zone = tracy.Zone.begin(.{
-        //     .name = "Parse Frame Header",
-        //     .src = @src(),
-        //     .color = .blue,
-        // });
-        // defer zone.end();
         var frame_header: FrameHeader = undefined;
         frame_header.unusual_sample_rate = null;
 
@@ -460,13 +454,6 @@ pub const SubFrame = struct {
     subblock: []i32,
 
     pub fn parseSubframe(br: ReaderToCRCWriter, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
-        // const zone = tracy.Zone.begin(.{
-        //     .name = "Parse SUB Frame",
-        //     .src = @src(),
-        //     .color = .green,
-        // });
-
-        // defer zone.end();
         var subframe: SubFrame = undefined;
         // std.debug.print("BR start: {}\n", .{br});
 
@@ -517,12 +504,7 @@ pub const SubFrame = struct {
         const decoded_sample_type = i32;
 
         // std.debug.print("checkpoint0\n", .{});
-        const subblock_zone = tracy.Zone.begin(.{
-            .name = "Subblock Parse",
-            .src = @src(),
-            .color = .pink,
-        });
-
+        const subblock_zone = tracy.ZoneN(@src(), "Parse Subblock");
         subframe.subblock = switch (subframe.header) {
             .constant => blk: {
                 const buf = try alloc.alloc(decoded_sample_type, frame.block_size);
@@ -558,11 +540,7 @@ pub const SubFrame = struct {
 
                 // std.debug.print("first partition: {}\n", .{current_partition});
 
-                // const partition_zone = tracy.Zone.begin(.{
-                //     .name = "Parse partition (fixed)",
-                //     .src = @src(),
-                //     .color = .white,
-                // });
+                const partition_zone = tracy.ZoneN(@src(), "Read Rice Partitions (fixed)");
                 try rice.readRicePartitionsIntoResidualBuffer(
                     br,
                     frame.block_size,
@@ -570,6 +548,7 @@ pub const SubFrame = struct {
                     coded_residual,
                     buf,
                 );
+                partition_zone.End();
 
                 switch (order) {
                     0 => {},
@@ -622,14 +601,16 @@ pub const SubFrame = struct {
                 if (prediction_right_shift < 0) {
                     return error.negative_lpc_shift;
                 }
+                const casted: u4 = @intCast(prediction_right_shift);
 
                 var coefficients = try alloc.alloc(i16, order);
                 for (0..order) |i| {
                     coefficients[i] = try util.readTwosComplementIntegerOfSetBits(br, i16, coefficient_precision);
                 }
-
+                std.debug.print("coefficients: {d}\n", .{coefficients});
                 const coded_residual = try rice.CodedResidual.readCodedResidual(br);
 
+                const partition_zone = tracy.ZoneN(@src(), "Read Rice Partitions (linear)");
                 try rice.readRicePartitionsIntoResidualBuffer(
                     br,
                     frame.block_size,
@@ -637,6 +618,7 @@ pub const SubFrame = struct {
                     coded_residual,
                     buf,
                 );
+                partition_zone.End();
 
                 for (order..buf.len) |i| {
                     var predicted: i64 = 0;
@@ -644,13 +626,13 @@ pub const SubFrame = struct {
                         predicted += @as(i64, @intCast(coefficients[x])) * buf[i - x - 1];
                     }
 
-                    buf[i] = @intCast(((predicted >> @intCast(prediction_right_shift)) + buf[i]) << wasted);
+                    buf[i] = @intCast(((predicted >> casted) + buf[i]) << wasted);
                 }
 
                 break :blk buf;
             },
         };
-        subblock_zone.end();
+        subblock_zone.End();
         // std.debug.print("Created: {d}\n", .{subframe.subblock});
 
         return subframe;

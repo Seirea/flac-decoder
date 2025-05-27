@@ -15,6 +15,24 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const options = .{
+        .enable_ztracy = b.option(
+            bool,
+            "enable_ztracy",
+            "Enable Tracy profile markers",
+        ) orelse false,
+        .enable_fibers = b.option(
+            bool,
+            "enable_fibers",
+            "Enable Tracy fiber support",
+        ) orelse false,
+        .on_demand = b.option(
+            bool,
+            "on_demand",
+            "Build tracy with TRACY_ON_DEMAND",
+        ) orelse false,
+    };
+
     // This creates a "module", which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
     // Every executable or library we compile will be based on one or more modules.
@@ -54,12 +72,14 @@ pub fn build(b: *std.Build) void {
     });
 
     // Get the Tracy dependency
-    const tracy = b.dependency("tracy", .{
-        .target = target,
-        .optimize = optimize,
+    const ztracy = b.dependency("ztracy", .{
+        .enable_ztracy = options.enable_ztracy,
+        .enable_fibers = options.enable_fibers,
+        .on_demand = options.on_demand,
         // ...
     });
-    lib.root_module.addImport("tracy", tracy.module("tracy"));
+    lib.root_module.addImport("tracy", ztracy.module("root"));
+    lib.linkLibrary(ztracy.artifact("tracy"));
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -73,24 +93,9 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
 
-    const tracy_enabled = b.option(
-        bool,
-        "tracy",
-        "Build with Tracy support.",
-    ) orelse false;
-
     // Make Tracy available as an import
-    exe.root_module.addImport("tracy", tracy.module("tracy"));
+    exe.root_module.addImport("tracy", ztracy.module("root"));
 
-    // Pick an implementation based on the build flags.
-    // Don't build both, we don't want to link with Tracy at all unless we intend to enable it.
-    if (tracy_enabled) {
-        // The user asked to enable Tracy, use the real implementation
-        exe.root_module.addImport("tracy_impl", tracy.module("tracy_impl_enabled"));
-    } else {
-        // The user asked to disable Tracy, use the dummy implementation
-        exe.root_module.addImport("tracy_impl", tracy.module("tracy_impl_disabled"));
-    }
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).

@@ -39,11 +39,6 @@ pub const Partition = struct {
     parameter: u5,
 
     pub fn readPartition(br: anytype, residual: CodedResidual) !Partition {
-        const partition_zone = tracy.Zone.begin(.{
-            .name = "READ partition",
-            .src = @src(),
-            .color = .white,
-        });
         const param: u5 = switch (residual.parameter_size) {
             .@"4-bits" => try br.readBitsNoEof(u5, 4),
             .@"5-bits" => try br.readBitsNoEof(u5, 5),
@@ -58,17 +53,10 @@ pub const Partition = struct {
             .parameter = if (escape) try br.readBitsNoEof(u5, 5) else param,
             .escaped = escape,
         };
-        partition_zone.end();
         return ret;
     }
 
     pub fn readNextResidual(partition: Partition, br: anytype) !i32 {
-        const zone = tracy.Zone.begin(.{
-            .name = "readNextResidual",
-            .src = @src(),
-            .color = .green,
-        });
-        defer zone.end();
         if (partition.escaped) {
             if (partition.parameter == 0) {
                 return 0;
@@ -129,6 +117,8 @@ test "check fold residual" {
 }
 
 pub fn readRiceSignedBlock(br: frame.ReaderToCRCWriter, vals: []i32, partition_parameter: u5) !void {
+    const partition_zone = tracy.ZoneN(@src(), "Read Rice Signed Block/Partition");
+    defer partition_zone.End();
     if (partition_parameter == 0) {
         //
         for (0..vals.len) |i| {
