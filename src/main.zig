@@ -7,8 +7,29 @@ pub const Signature = extern struct {
 
 const allocator = std.heap.smp_allocator;
 
+pub fn parseFrameWithBitDepth(
+    reader: std.io.AnyReader,
+    alloc: *std.heap.ArenaAllocator,
+    stream_info: lib.metadata.block.StreamInfo,
+    out: std.io.AnyWriter,
+    write_type: type,
+) !void {
+    while (lib.frame.Frame.parseFrame(reader, alloc.allocator(), stream_info) catch |err| switch (err) {
+        error.EndOfStream => null,
+        else => |er| return er,
+    }) |x| {
+        for (0..x.header.block_size) |sample| {
+            for (x.sub_frames) |subframe| {
+                const val = subframe.subblock[sample];
+                try out.writeInt(write_type, @intCast(val), std.builtin.Endian.little);
+            }
+        }
+        _ = alloc.reset(.retain_capacity);
+    }
+}
+
 pub fn main() !void {
-    const file = try std.fs.cwd().openFile("test/test.flac", .{});
+    const file = try std.fs.cwd().openFile("test/test2.flac", .{});
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
 
@@ -112,35 +133,35 @@ pub fn main() !void {
 
     const out_wav = try std.fs.cwd().createFile("out.wav", .{});
     var bw = std.io.bufferedWriter(out_wav.writer());
-    const stdout = bw.writer();
+    const wav_writer = bw.writer();
 
-    const bit_depth = streaminfo_saved.?.bits_per_sample_minus_one + 1;
+    const bit_depth = @as(u6, streaminfo_saved.?.bits_per_sample_minus_one) + 1;
 
     const nchannels = streaminfo_saved.?.number_of_channels_minus_one + 1;
     const num_of_samples: u32 = @intCast(streaminfo_saved.?.number_of_interchannel_samples);
     const samplerate = streaminfo_saved.?.sample_rate;
     // const duration = num_of_samples / samplerate;
 
-    try stdout.writeAll("RIFF");
+    try wav_writer.writeAll("RIFF");
     const header_size = 36;
-    try stdout.writeInt(
+    try wav_writer.writeInt(
         u32,
         header_size + num_of_samples * nchannels * (bit_depth / 8),
         std.builtin.Endian.little,
     );
-    try stdout.writeAll("WAVE");
+    try wav_writer.writeAll("WAVE");
 
-    try stdout.writeAll("fmt ");
-    try stdout.writeInt(u32, 16, std.builtin.Endian.little);
-    try stdout.writeInt(u16, 1, std.builtin.Endian.little);
-    try stdout.writeInt(u16, nchannels, std.builtin.Endian.little);
-    try stdout.writeInt(u32, samplerate, std.builtin.Endian.little);
+    try wav_writer.writeAll("fmt ");
+    try wav_writer.writeInt(u32, 16, std.builtin.Endian.little);
+    try wav_writer.writeInt(u16, 1, std.builtin.Endian.little);
+    try wav_writer.writeInt(u16, nchannels, std.builtin.Endian.little);
+    try wav_writer.writeInt(u32, samplerate, std.builtin.Endian.little);
     const blockAlign = nchannels * (bit_depth / 8);
-    try stdout.writeInt(u32, blockAlign * samplerate, std.builtin.Endian.little);
-    try stdout.writeInt(u16, blockAlign, std.builtin.Endian.little);
-    try stdout.writeInt(u16, bit_depth, std.builtin.Endian.little);
-    try stdout.writeAll("data");
-    try stdout.writeInt(
+    try wav_writer.writeInt(u32, @as(u32, blockAlign) * samplerate, std.builtin.Endian.little);
+    try wav_writer.writeInt(u16, blockAlign, std.builtin.Endian.little);
+    try wav_writer.writeInt(u16, bit_depth, std.builtin.Endian.little);
+    try wav_writer.writeAll("data");
+    try wav_writer.writeInt(
         u32,
         num_of_samples * nchannels * (bit_depth / 8),
         std.builtin.Endian.little,
@@ -148,35 +169,22 @@ pub fn main() !void {
 
     var frame_arena = std.heap.ArenaAllocator.init(allocator);
 
-    while (lib.frame.Frame.parseFrame(file_reader.any(), frame_arena.allocator(), streaminfo_saved) catch |err| switch (err) {
-        error.EndOfStream => null,
-        else => |er| return er,
-    }) |x| {
-        for (0..x.header.block_size) |sample| {
-            for (x.sub_frames) |subframe| {
-                const val = subframe.subblock[sample];
-                if (bit_depth == 8) {
-                    const uval: u8 = @intCast(@max(0, @min(val + 128, 255)));
-                    try stdout.writeInt(u8, uval, std.builtin.Endian.little);
-                } else if (bit_depth == 16) {
-                    try stdout.writeInt(i16, @truncate(val), std.builtin.Endian.little);
-                } else if (bit_depth == 24) {
-                    const sval: i32 = @truncate(val);
-                    const b0: u8 = @intCast(sval & 0xFF);
-                    const b1: u8 = @intCast((sval >> 8) & 0xFF);
-                    const b2: u8 = @intCast((sval >> 16) & 0xFF);
-                    try stdout.writeByte(b0);
-                    try stdout.writeByte(b1);
-                    try stdout.writeByte(b2);
-                } else if (bit_depth == 32) {
-                    try stdout.writeInt(i32, @truncate(val), std.builtin.Endian.little);
-                } else {
-                    try stdout.writeInt(i16, @truncate(val), std.builtin.Endian.little);
-                }
-            }
-        }
-        _ = frame_arena.reset(.retain_capacity);
+    switch (bit_depth) {
+        8 => {
+            try parseFrameWithBitDepth(file_reader.any(), &frame_arena, streaminfo_saved.?, wav_writer.any(), i8);
+        },
+        16 => {
+            try parseFrameWithBitDepth(file_reader.any(), &frame_arena, streaminfo_saved.?, wav_writer.any(), i16);
+        },
+        24 => {
+            try parseFrameWithBitDepth(file_reader.any(), &frame_arena, streaminfo_saved.?, wav_writer.any(), i24);
+        },
+        32 => {
+            try parseFrameWithBitDepth(file_reader.any(), &frame_arena, streaminfo_saved.?, wav_writer.any(), i32);
+        },
+        else => @panic("Unsupported bit depth"),
     }
+
     frame_arena.deinit();
 
     // write audio
