@@ -607,7 +607,7 @@ pub const SubFrame = struct {
                 for (0..order) |i| {
                     coefficients[i] = try util.readTwosComplementIntegerOfSetBits(br, i16, coefficient_precision);
                 }
-                std.debug.print("coefficients: {d}\n", .{coefficients});
+                // std.debug.print("coefficients: {d}\n", .{coefficients});
                 const coded_residual = try rice.CodedResidual.readCodedResidual(br);
 
                 const partition_zone = tracy.ZoneN(@src(), "Read Rice Partitions (linear)");
