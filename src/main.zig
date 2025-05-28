@@ -152,16 +152,27 @@ pub fn main() !void {
         error.EndOfStream => null,
         else => |er| return er,
     }) |x| {
-        // std.debug.print("Channel: {}\n", .{x.header.channel});
-        // std.debug.print("SUBFRAMES: {any}\n", .{x.sub_frames});
         for (0..x.header.block_size) |sample| {
             for (x.sub_frames) |subframe| {
-                try stdout.writeInt(
-                    i16,
-                    @truncate(subframe.subblock[sample]),
-
-                    std.builtin.Endian.little,
-                );
+                const val = subframe.subblock[sample];
+                if (bit_depth == 8) {
+                    const uval: u8 = @intCast(@max(0, @min(val + 128, 255)));
+                    try stdout.writeInt(u8, uval, std.builtin.Endian.little);
+                } else if (bit_depth == 16) {
+                    try stdout.writeInt(i16, @truncate(val), std.builtin.Endian.little);
+                } else if (bit_depth == 24) {
+                    const sval: i32 = @truncate(val);
+                    const b0: u8 = @intCast(sval & 0xFF);
+                    const b1: u8 = @intCast((sval >> 8) & 0xFF);
+                    const b2: u8 = @intCast((sval >> 16) & 0xFF);
+                    try stdout.writeByte(b0);
+                    try stdout.writeByte(b1);
+                    try stdout.writeByte(b2);
+                } else if (bit_depth == 32) {
+                    try stdout.writeInt(i32, @truncate(val), std.builtin.Endian.little);
+                } else {
+                    try stdout.writeInt(i16, @truncate(val), std.builtin.Endian.little);
+                }
             }
         }
         _ = frame_arena.reset(.retain_capacity);
