@@ -31,7 +31,7 @@ pub fn parseFrameWithBitDepth(
                     try out.writeInt(write_type, @intCast(val), std.builtin.Endian.little);
                 } else {
                     // unsigned
-                    try out.writeInt(write_type, @intCast(((std.math.maxInt(write_type) >> 1) + val) + 1), std.builtin.Endian.little);
+                    try out.writeInt(write_type, @intCast(((std.math.maxInt(write_type) >> 1) + 1) + val), std.builtin.Endian.little);
                 }
             }
         }
@@ -42,7 +42,7 @@ pub fn parseFrameWithBitDepth(
 pub fn main() !void {
     var allocator = tracy_allocator.allocator();
 
-    const file = try std.fs.cwd().openFile("test/song.flac", .{});
+    const file = try std.fs.cwd().openFile("test/example_3.flac", .{});
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
 
