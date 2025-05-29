@@ -55,33 +55,6 @@ pub const Partition = struct {
         };
         return ret;
     }
-
-    pub fn readNextResidual(partition: Partition, br: anytype) !i32 {
-        if (partition.escaped) {
-            if (partition.parameter == 0) {
-                return 0;
-            }
-            // std.debug.print("IS ESCAPEDD\n", .{});
-            return try util.readTwosComplementIntegerOfSetBits(
-                br,
-                // std.meta.Int(.signed, partition.parameter),
-                i32,
-                partition.parameter,
-            );
-        } else {
-            // TODO: determine the correct quotient and remainder size
-            var quotient: u8 = 0;
-            while (try br.readBitsNoEof(u1, 1) == 0) : (quotient += 1) {}
-            const remainder = try br.readBitsNoEof(u32, partition.parameter);
-            const folded_residual: u32 = (@as(u32, quotient) << partition.parameter) | remainder;
-            // std.debug.print("quo: {}, rem: {} => Folded: {}\n", .{ quotient, remainder, folded_residual });
-            if (folded_residual % 2 == 0) {
-                return @bitCast(folded_residual >> 1);
-            } else {
-                return @bitCast(~(folded_residual >> 1));
-            }
-        }
-    }
 };
 //
 

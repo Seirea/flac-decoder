@@ -181,7 +181,8 @@ pub const Frame = struct {
 
         // stereo decorrelation
 
-        // TODO: check if the compiler auto vectorizes these, because it SHOULD
+        // check if the compiler auto vectorizes these, because it SHOULD
+        // NOTE from stanley: I checked, the compiler does auto vectorize these in ReleaseFast :)
         switch (frame.header.channel) {
             .left_side => {
                 const left = frame.sub_frames[0].subblock; // left

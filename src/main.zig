@@ -26,7 +26,13 @@ pub fn parseFrameWithBitDepth(
         for (0..x.header.block_size) |sample| {
             for (x.sub_frames) |subframe| {
                 const val = subframe.subblock[sample];
-                try out.writeInt(write_type, @intCast(val), std.builtin.Endian.little);
+                if (@typeInfo(write_type).int.signedness == .signed) {
+                    // signed
+                    try out.writeInt(write_type, @intCast(val), std.builtin.Endian.little);
+                } else {
+                    // unsigned
+                    try out.writeInt(write_type, @intCast(((std.math.maxInt(write_type) >> 1) + val) + 1), std.builtin.Endian.little);
+                }
             }
         }
         _ = alloc.reset(.retain_capacity);
@@ -36,7 +42,7 @@ pub fn parseFrameWithBitDepth(
 pub fn main() !void {
     var allocator = tracy_allocator.allocator();
 
-    const file = try std.fs.cwd().openFile("test/test2.flac", .{});
+    const file = try std.fs.cwd().openFile("test/song.flac", .{});
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
 
@@ -180,7 +186,7 @@ pub fn main() !void {
 
     switch (bit_depth) {
         8 => {
-            try parseFrameWithBitDepth(&custom_bit_reader, &frame_arena, streaminfo_saved.?, wav_writer.any(), i8);
+            try parseFrameWithBitDepth(&custom_bit_reader, &frame_arena, streaminfo_saved.?, wav_writer.any(), u8);
         },
         16 => {
             try parseFrameWithBitDepth(&custom_bit_reader, &frame_arena, streaminfo_saved.?, wav_writer.any(), i16);
