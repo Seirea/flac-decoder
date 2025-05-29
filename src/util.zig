@@ -44,6 +44,57 @@ pub fn readTwosComplementIntegerOfSetBits(br: frame.ReaderToCRCWriter, comptime 
 // -> 1
 // self.count = 1
 // return 1
+pub const AnyBitReader = std.io.BitReader(.big, std.io.AnyReader);
+
+pub inline fn getLowerNBits(x: u8, n: u3) u8 {
+    return x & ((@as(u8, 1) << n) - 1);
+}
+
+pub fn removeBits(self: *AnyBitReader, num: u4) u8 {
+    if (num == 8) {
+        self.count = 0;
+        return self.bits;
+    }
+
+    // std.debug.print("keep = {} - {}\n", .{ self.count, num });
+    const keep = self.count - num;
+    // force big endian
+    const bits = self.bits >> @intCast(keep);
+    // self.bits &= low_bit_mask[keep];
+    // self.bits &= (@as(u8, 1) << @intCast(keep)) - 1;
+    self.bits = getLowerNBits(self.bits, @intCast(keep));
+
+    self.count = keep;
+    return bits;
+}
+
+pub fn readUnary(br: *AnyBitReader) !u32 {
+    // check our internal first
+    var n: u32 = @clz(br.bits << @truncate(8 - br.count));
+
+    // std.debug.print("{} < {}\n", .{ n, br.count });
+    if (n < br.count) {
+        // we can just use what we already have
+        _ = removeBits(br, @as(u4, @intCast(n + 1)));
+    } else {
+        n = br.count;
+
+        while (true) {
+            const fresh_byte = try br.reader.readByte();
+            const zeroes = @clz(fresh_byte);
+            n += zeroes;
+            if (zeroes < 8) {
+                // We consumed the zeros, plus the one following it.
+                br.count = 8 - (zeroes + 1);
+                // 0 < br.count < 7
+                br.bits = getLowerNBits(fresh_byte, @intCast(br.count));
+                break;
+            }
+        }
+    }
+
+    return n;
+}
 
 // pub fn readUnary(br: *cbr.CustomBitReader(.big, frame.Word, std.io.AnyReader)) !frame.Word {
 //     var ret: frame.Word = 0;

@@ -1,9 +1,6 @@
 const std = @import("std");
 const lib = @import("flac_decoder_lib");
 const builtin = @import("builtin");
-
-const wbr = lib.word_bit_reader;
-
 const tracy = @import("tracy");
 
 pub const Signature = extern struct {
@@ -13,7 +10,7 @@ pub const Signature = extern struct {
 var tracy_allocator = tracy.TracyAllocator.init(std.heap.smp_allocator);
 
 pub fn parseFrameWithBitDepth(
-    reader: *wbr.MachineWBR,
+    reader: *lib.util.AnyBitReader,
     alloc: *std.heap.ArenaAllocator,
     stream_info: lib.metadata.block.StreamInfo,
     out: std.io.AnyWriter,
@@ -182,20 +179,20 @@ pub fn main() !void {
 
     var frame_arena = std.heap.ArenaAllocator.init(allocator);
 
-    var custom_bit_reader = wbr.WordBitReader(lib.word_bit_reader.WordType).init(file_reader.any());
+    var bit_reader = std.io.bitReader(.big, file_reader.any());
 
     switch (bit_depth) {
         8 => {
-            try parseFrameWithBitDepth(&custom_bit_reader, &frame_arena, streaminfo_saved.?, wav_writer.any(), u8);
+            try parseFrameWithBitDepth(&bit_reader, &frame_arena, streaminfo_saved.?, wav_writer.any(), u8);
         },
         16 => {
-            try parseFrameWithBitDepth(&custom_bit_reader, &frame_arena, streaminfo_saved.?, wav_writer.any(), i16);
+            try parseFrameWithBitDepth(&bit_reader, &frame_arena, streaminfo_saved.?, wav_writer.any(), i16);
         },
         24 => {
-            try parseFrameWithBitDepth(&custom_bit_reader, &frame_arena, streaminfo_saved.?, wav_writer.any(), i24);
+            try parseFrameWithBitDepth(&bit_reader, &frame_arena, streaminfo_saved.?, wav_writer.any(), i24);
         },
         32 => {
-            try parseFrameWithBitDepth(&custom_bit_reader, &frame_arena, streaminfo_saved.?, wav_writer.any(), i32);
+            try parseFrameWithBitDepth(&bit_reader, &frame_arena, streaminfo_saved.?, wav_writer.any(), i32);
         },
         else => @panic("Unsupported bit depth"),
     }
