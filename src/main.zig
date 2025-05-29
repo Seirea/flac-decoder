@@ -45,7 +45,6 @@ pub fn main() !void {
     }
 
     var metadata_arena = std.heap.ArenaAllocator.init(allocator);
-    defer metadata_arena.deinit();
     var streaminfo_saved: ?lib.metadata.block.StreamInfo = null;
     // read metadata
     while (true) {
@@ -136,6 +135,8 @@ pub fn main() !void {
 
     std.debug.print("Metadata read\n", .{});
 
+    metadata_arena.deinit();
+
     const out_wav = try std.fs.cwd().createFile("out.wav", .{});
     defer out_wav.close();
     var bw = std.io.bufferedWriter(out_wav.writer());
@@ -174,7 +175,6 @@ pub fn main() !void {
     );
 
     var frame_arena = std.heap.ArenaAllocator.init(allocator);
-    defer frame_arena.deinit();
 
     switch (bit_depth) {
         8 => {
@@ -191,6 +191,8 @@ pub fn main() !void {
         },
         else => @panic("Unsupported bit depth"),
     }
+
+    frame_arena.deinit();
 
     // write audio
     //     for (0..frame.channel.channelToNumberOfSubframesMinusOne() + 1) |i| {
