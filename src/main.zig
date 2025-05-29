@@ -29,7 +29,10 @@ pub fn parseFrameWithBitDepth(
 }
 
 pub fn main() !void {
-    const file = try std.fs.cwd().openFile("test/test2.flac", .{});
+    var args = std.process.args();
+    _ = args.next(); // skip the executable
+    const path = args.next() orelse "test/test.flac";
+    const file = try std.fs.cwd().openFile(path, .{});
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
 
@@ -119,6 +122,8 @@ pub fn main() !void {
                 std.debug.print("Unhandled Block Type: {b}\n", .{
                     buf,
                 });
+                //:skull:
+                allocator.free(buf);
             },
         }
 
@@ -171,7 +176,7 @@ pub fn main() !void {
 
     switch (bit_depth) {
         8 => {
-            try parseFrameWithBitDepth(file_reader.any(), &frame_arena, streaminfo_saved.?, wav_writer.any(), i8);
+            try parseFrameWithBitDepth(file_reader.any(), &frame_arena, streaminfo_saved.?, wav_writer.any(), u8);
         },
         16 => {
             try parseFrameWithBitDepth(file_reader.any(), &frame_arena, streaminfo_saved.?, wav_writer.any(), i16);
