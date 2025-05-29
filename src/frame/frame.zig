@@ -4,7 +4,8 @@ const util = @import("../util.zig");
 const StreamInfo = @import("../metadata/block.zig").StreamInfo;
 const tracy = @import("tracy");
 
-const cbr = @import("../custom_bit_reader.zig");
+// const cbr = @import("../custom_bit_reader.zig");
+const wbr = @import("../word_bit_reader.zig");
 
 const crc8 = std.hash.crc.Crc(u8, .{
     .polynomial = 0x07,
@@ -130,7 +131,7 @@ pub const Frame = struct {
     sub_frames: []SubFrame,
     footer: u16,
 
-    pub fn parseFrame(reader: *cbr.AnyCustomBitReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
+    pub fn parseFrame(reader: *wbr.MachineWBR, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
         var frame: Frame = undefined;
 
         var hasher8 = crc8.init();
@@ -142,7 +143,7 @@ pub const Frame = struct {
         var crc16_bw = std.io.bitWriter(.big, crc16_writer);
 
         var crc_reader = ReaderToCRCWriter{
-            .cbr = reader,
+            .wbr = reader,
             .bw8 = &crc8_bw,
             .bw16 = &crc16_bw,
         };
@@ -167,12 +168,12 @@ pub const Frame = struct {
 
         // std.debug.print("checkpoint3\n", .{});
 
-        crc_reader.cbr.alignToByte();
+        crc_reader.wbr.alignToByte();
 
         try crc_reader.bw16.flushBits();
         const fin = crc_reader.bw16.writer.crc_obj.final();
         // read crc
-        frame.footer = try crc_reader.cbr.readInt(u16);
+        frame.footer = @as(u16, @intCast(try crc_reader.wbr.readBits(16)));
         // std.debug.print("Footer says CRC should be: {} | What we got: {}\n", .{ frame.footer, fin });
         // CRC16 Check (return error if failed)
         if (fin != frame.footer) {
@@ -245,6 +246,7 @@ pub fn CrcWriter(comptime T: type) type {
 
             // NOTE FROM STANLEY: KEEP THIS IN IT IS VERY USEFUL
             // std.debug.print("wrotebyte: {X} to {}\n", .{ out, self });
+            std.debug.print("wrotebyte: {X}\n", .{out});
             // std.debug.print("wrotebyte: {X}\n", .{out});
         }
 
@@ -258,7 +260,7 @@ pub fn CrcWriter(comptime T: type) type {
 pub const ReaderToCRCWriter = struct {
     // NOTE from Stanley: due to the nature of CustomBitReader, reader MUST NOT BE MIXED WITH cbr
     // reader: std.io.AnyReader,
-    cbr: *cbr.AnyCustomBitReader,
+    wbr: *wbr.MachineWBR,
     bw8: *std.io.BitWriter(.big, CrcWriter(crc8)),
     bw16: *std.io.BitWriter(.big, CrcWriter(crc16)),
 
@@ -320,7 +322,7 @@ pub const ReaderToCRCWriter = struct {
         );
         defer tracy_zone.End();
 
-        const readed = try self.cbr.readBitsNoEof(I, num);
+        const readed: I = @intCast(try self.wbr.readBits(@intCast(num)));
         try self.bw8.writeBits(readed, num);
         try self.bw16.writeBits(readed, num);
 
@@ -328,7 +330,7 @@ pub const ReaderToCRCWriter = struct {
     }
 
     pub fn readUnary(self: ReaderToCRCWriter) !u32 {
-        const read = try self.cbr.readUnary();
+        const read = try self.wbr.readUnary();
 
         // std.debug.print("Writing {} unary bits\n", .{read + 1});
 
@@ -346,7 +348,7 @@ pub const ReaderToCRCWriter = struct {
     }
 
     pub fn readInt(self: ReaderToCRCWriter, comptime I: type) !I {
-        const readed = try self.cbr.readInt(I);
+        const readed = @as(I, @intCast(try self.wbr.readBits(@bitSizeOf(I))));
         try self.bw8.writeBits(readed, @bitSizeOf(I));
         try self.bw16.writeBits(readed, @bitSizeOf(I));
 

@@ -2,7 +2,7 @@ const std = @import("std");
 const lib = @import("flac_decoder_lib");
 const builtin = @import("builtin");
 
-pub const cbr = lib.custom_bit_reader;
+const wbr = lib.word_bit_reader;
 
 const tracy = @import("tracy");
 
@@ -13,7 +13,7 @@ pub const Signature = extern struct {
 var tracy_allocator = tracy.TracyAllocator.init(std.heap.smp_allocator);
 
 pub fn parseFrameWithBitDepth(
-    reader: *cbr.AnyCustomBitReader,
+    reader: *wbr.MachineWBR,
     alloc: *std.heap.ArenaAllocator,
     stream_info: lib.metadata.block.StreamInfo,
     out: std.io.AnyWriter,
@@ -42,7 +42,7 @@ pub fn parseFrameWithBitDepth(
 pub fn main() !void {
     var allocator = tracy_allocator.allocator();
 
-    const file = try std.fs.cwd().openFile("test/example_3.flac", .{});
+    const file = try std.fs.cwd().openFile("test/test2.flac", .{});
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
 
@@ -182,7 +182,7 @@ pub fn main() !void {
 
     var frame_arena = std.heap.ArenaAllocator.init(allocator);
 
-    var custom_bit_reader = cbr.customBitReader(.big, lib.custom_bit_reader.WordType, file_reader.any());
+    var custom_bit_reader = wbr.WordBitReader(lib.word_bit_reader.WordType).init(file_reader.any());
 
     switch (bit_depth) {
         8 => {
