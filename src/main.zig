@@ -29,7 +29,7 @@ inline fn parseFrameWithBitDepth(
 }
 
 pub fn main() !void {
-    var args = std.process.args();
+    var args = try std.process.ArgIterator.initWithAllocator(allocator);
     _ = args.next(); // skip the executable
     const path = args.next() orelse "test/test.flac";
     const file = try std.fs.cwd().openFile(path, .{});
