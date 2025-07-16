@@ -17,7 +17,7 @@ pub fn parseFrameWithBitDepth(
     alloc: *std.heap.ArenaAllocator,
     stream_info: lib.metadata.block.StreamInfo,
     out: std.io.AnyWriter,
-    write_type: type,
+    comptime write_type: type,
 ) !void {
     while (lib.frame.Frame.parseFrame(reader, alloc.allocator(), stream_info) catch |err| switch (err) {
         error.EndOfStream => null,
@@ -42,7 +42,12 @@ pub fn parseFrameWithBitDepth(
 pub fn main() !void {
     var allocator = tracy_allocator.allocator();
 
-    const file = try std.fs.cwd().openFile("test/example_3.flac", .{});
+    var args = try std.process.ArgIterator.initWithAllocator(allocator);
+    _ = args.next(); // skip the executable
+    const path = args.next() orelse "test/test.flac";
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
     var breader = std.io.bufferedReader(file.reader());
     const file_reader = breader.reader();
 
@@ -132,6 +137,8 @@ pub fn main() !void {
                 std.debug.print("Unhandled Block Type: {b}\n", .{
                     buf,
                 });
+                //:skull:
+                allocator.free(buf);
             },
         }
 
@@ -145,6 +152,7 @@ pub fn main() !void {
     metadata_arena.deinit();
 
     const out_wav = try std.fs.cwd().createFile("out.wav", .{});
+    defer out_wav.close();
     var bw = std.io.bufferedWriter(out_wav.writer());
     const wav_writer = bw.writer();
 
@@ -224,6 +232,4 @@ pub fn main() !void {
     // }
 
     try bw.flush();
-
-    file.close();
 }
