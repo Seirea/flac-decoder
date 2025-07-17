@@ -40,6 +40,12 @@ pub const Decoder = struct {
             self.stream.reader().any(),
         );
 
+        // std.debug.print("\n\nblock_header:{}", .{block_header});
+
+        if (block_header.is_last_block) {
+            self.metadata_done = true;
+        }
+
         switch (block_header.metadata_block_type) {
             // streaminfo
             .streaminfo => {
@@ -111,10 +117,6 @@ pub const Decoder = struct {
                 });
                 return null;
             },
-        }
-
-        if (block_header.is_last_block) {
-            self.metadata_done = true;
         }
     }
 };
