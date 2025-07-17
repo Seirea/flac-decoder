@@ -22,7 +22,7 @@ const crc16 = std.hash.crc.Crc(u16, .{
     .xor_output = 0x0,
 });
 
-const FrameParsingError = error{
+pub const FrameParsingError = error{
     incorrect_frame_sync,
     missing_zero_bit, // subframe
     forbidden_sample_rate,

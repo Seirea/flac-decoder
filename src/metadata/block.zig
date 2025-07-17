@@ -169,7 +169,7 @@ pub const CueSheet = struct {
         index_point: u8,
     };
 
-    pub fn createFromReader(reader: std.io.AnyReader, alloc: std.mem.Allocator, _: u24) !CueSheet {
+    pub fn createFromReader(reader: std.io.AnyReader, alloc: std.mem.Allocator) !CueSheet {
         var ret: CueSheet = undefined;
         var br = std.io.bitReader(.big, reader);
 
