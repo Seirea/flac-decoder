@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // all fields of S must be integer types
-pub fn getBlockFromReader(comptime S: type, reader: std.io.AnyReader) !S {
+pub fn getBlockFromReader(comptime S: type, reader: std.io.Reader) !S {
     var br = std.io.bitReader(.big, reader);
 
     var out: S = undefined;

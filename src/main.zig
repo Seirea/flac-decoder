@@ -34,10 +34,10 @@ pub fn main() !void {
     const path = args.next() orelse "test/test.flac";
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
-    var breader = std.io.bufferedReader(file.reader());
-    const file_reader = breader.reader();
+    var file_buf: [8192]u8 = undefined;
+    var file_reader = file.reader(&file_buf).interface;
 
-    const sig: Signature = try file_reader.readStruct(Signature);
+    const sig: Signature = try file_reader.takeStruct(Signature, .little);
     std.debug.print("{s}\n", sig);
 
     if (!std.mem.eql(u8, &sig.sig, "fLaC")) {
@@ -50,7 +50,7 @@ pub fn main() !void {
     while (true) {
         const block_header = try lib.metadata.block.getBlockFromReader(
             lib.metadata.block.Header,
-            file_reader.any(),
+            file_reader,
         );
         std.debug.print("Metadata Block Header: {}\n", .{block_header});
 
