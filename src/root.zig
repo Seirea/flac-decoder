@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const metadata = @import("metadata/metadata.zig");
 pub const frame = @import("frame/frame.zig");
-pub const custom_bit_reader = @import("custom_bit_reader.zig");
+pub const bit_reader = @import("bit_reader.zig");
 
 pub const DecoderError = error{
     magic_bytes_mismatch,

@@ -1,5 +1,4 @@
 const std = @import("std");
-const tracy = @import("tracy");
 const frame = @import("frame/frame.zig");
 const util = @import("util.zig");
 
@@ -90,8 +89,8 @@ test "check fold residual" {
 }
 
 pub fn readRiceSignedBlock(br: frame.ReaderToCRCWriter, vals: []i32, partition_parameter: u5) !void {
-    const partition_zone = tracy.ZoneN(@src(), "Read Rice Signed Block/Partition");
-    defer partition_zone.End();
+    // const partition_zone = tracy.ZoneN(@src(), "Read Rice Signed Block/Partition");
+    // defer partition_zone.End();
     if (partition_parameter == 0) {
         //
         for (0..vals.len) |i| {

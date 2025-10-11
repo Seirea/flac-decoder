@@ -4,9 +4,7 @@ const builtin = @import("builtin");
 
 pub const cbr = lib.custom_bit_reader;
 
-const tracy = @import("tracy");
-
-var tracy_allocator = tracy.TracyAllocator.init(std.heap.smp_allocator);
+// var tracy_allocator = tracy.TracyAllocator.init(std.heap.smp_allocator);
 
 pub fn parseFrameWithBitDepth(
     reader: *cbr.AnyCustomBitReader,

@@ -15,23 +15,23 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const options = .{
-        .enable_ztracy = b.option(
-            bool,
-            "enable_ztracy",
-            "Enable Tracy profile markers",
-        ) orelse false,
-        .enable_fibers = b.option(
-            bool,
-            "enable_fibers",
-            "Enable Tracy fiber support",
-        ) orelse false,
-        .on_demand = b.option(
-            bool,
-            "on_demand",
-            "Build tracy with TRACY_ON_DEMAND",
-        ) orelse false,
-    };
+    // const options = .{
+    //     .enable_ztracy = b.option(
+    //         bool,
+    //         "enable_ztracy",
+    //         "Enable Tracy profile markers",
+    //     ) orelse false,
+    //     .enable_fibers = b.option(
+    //         bool,
+    //         "enable_fibers",
+    //         "Enable Tracy fiber support",
+    //     ) orelse false,
+    //     .on_demand = b.option(
+    //         bool,
+    //         "on_demand",
+    //         "Build tracy with TRACY_ON_DEMAND",
+    //     ) orelse false,
+    // };
 
     // This creates a "module", which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
@@ -72,14 +72,14 @@ pub fn build(b: *std.Build) void {
     });
 
     // Get the Tracy dependency
-    const ztracy = b.dependency("ztracy", .{
-        .enable_ztracy = options.enable_ztracy,
-        .enable_fibers = options.enable_fibers,
-        .on_demand = options.on_demand,
-        // ...
-    });
-    lib.root_module.addImport("tracy", ztracy.module("root"));
-    lib.linkLibrary(ztracy.artifact("tracy"));
+    // const ztracy = b.dependency("ztracy", .{
+    //     .enable_ztracy = options.enable_ztracy,
+    //     .enable_fibers = options.enable_fibers,
+    //     .on_demand = options.on_demand,
+    //     // ...
+    // });
+    // lib.root_module.addImport("tracy", ztracy.module("root"));
+    // lib.linkLibrary(ztracy.artifact("tracy"));
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -94,7 +94,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Make Tracy available as an import
-    exe.root_module.addImport("tracy", ztracy.module("root"));
+    // exe.root_module.addImport("tracy", ztracy.module("root"));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

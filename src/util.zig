@@ -1,5 +1,5 @@
 const std = @import("std");
-const cbr = @import("custom_bit_reader.zig");
+const bit_reader = @import("bit_reader.zig");
 const frame = @import("frame/frame.zig");
 
 pub fn signExtendFromDynamicBitWidth(comptime T: type, val: T, bit_size: u16) T {

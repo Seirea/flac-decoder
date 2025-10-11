@@ -4,7 +4,7 @@ const util = @import("../util.zig");
 const StreamInfo = @import("../metadata/block.zig").StreamInfo;
 const tracy = @import("tracy");
 
-const cbr = @import("../custom_bit_reader.zig");
+const bit_reader = @import("../bit_reader.zig");
 
 const crc8 = std.hash.crc.Crc(u8, .{
     .polynomial = 0x07,
@@ -130,7 +130,7 @@ pub const Frame = struct {
     sub_frames: []SubFrame,
     footer: u16,
 
-    pub fn parseFrame(reader: *cbr.AnyCustomBitReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
+    pub fn parseFrame(reader: *bit_reader.AnyBitReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
         var frame: Frame = undefined;
 
         var hasher8 = crc8.init();
@@ -258,7 +258,7 @@ pub fn CrcWriter(comptime T: type) type {
 pub const ReaderToCRCWriter = struct {
     // NOTE from Stanley: due to the nature of CustomBitReader, reader MUST NOT BE MIXED WITH cbr
     // reader: std.io.AnyReader,
-    cbr: *cbr.AnyCustomBitReader,
+    cbr: *bit_reader.AnyBitReader,
     bw8: *std.io.BitWriter(.big, CrcWriter(crc8)),
     bw16: *std.io.BitWriter(.big, CrcWriter(crc16)),
 
