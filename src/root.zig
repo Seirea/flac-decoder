@@ -10,22 +10,24 @@ pub const DecoderError = error{
 
 pub const Decoder = struct {
     stream_info: ?metadata.block.StreamInfo = null,
-    stream: std.io.StreamSource,
+    reader: std.Io.Reader,
+    bit_reader: bit_reader.AnyBitReader,
     metadata_done: bool = false,
     allocator: std.mem.Allocator,
 
-    pub fn init(stream: std.io.StreamSource, alloc: std.mem.Allocator) Decoder {
+    pub fn init(reader: std.Io.Reader, alloc: std.mem.Allocator) Decoder {
         return .{
-            .stream = stream,
+            .reader = reader,
+            .bit_reader = bit_reader.bitReader(.big, reader),
             .allocator = alloc,
         };
     }
 
     pub fn read_magic(self: *Decoder) !void {
-        const sig: [4]u8 = try self.stream.reader().readBytesNoEof(4);
+        const sig: []u8 = try self.reader.take(4);
         std.debug.print("{s}\n", .{sig});
 
-        if (!std.mem.eql(u8, &sig, "fLaC")) {
+        if (!std.mem.eql(u8, sig, "fLaC")) {
             return DecoderError.magic_bytes_mismatch;
         }
     }
@@ -37,7 +39,7 @@ pub const Decoder = struct {
 
         const block_header = try metadata.block.getBlockFromReader(
             metadata.block.Header,
-            self.stream.reader().any(),
+            self.reader,
         );
 
         // std.debug.print("\n\nblock_header:{}", .{block_header});
@@ -120,3 +122,10 @@ pub const Decoder = struct {
         }
     }
 };
+
+test "read_magic" {
+    const reader = std.Io.Reader.fixed("fLaC");
+    var dec = Decoder.init(reader, std.testing.allocator);
+
+    try dec.read_magic();
+}

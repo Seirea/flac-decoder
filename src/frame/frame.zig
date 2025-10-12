@@ -635,7 +635,6 @@ pub const SubFrame = struct {
                 break :blk buf;
             },
         };
-        subblock_zone.End();
         // std.debug.print("Created: {d}\n", .{subframe.subblock});
 
         return subframe;

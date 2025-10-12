@@ -105,7 +105,6 @@ pub fn readRiceSignedBlock(br: frame.ReaderToCRCWriter, vals: []i32, partition_p
         const remainder = try br.readBitsNoEof(u32, partition_parameter);
         vals[i] = unfold_residual((quotient << partition_parameter) | remainder);
     }
-    return;
 }
 
 pub fn readRicePartitionsIntoResidualBuffer(br: frame.ReaderToCRCWriter, block_size: u16, predictor_order: u6, coded_residual: CodedResidual, residuals: []i32) !void {
