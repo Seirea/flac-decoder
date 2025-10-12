@@ -4,9 +4,9 @@ const builtin = @import("builtin");
 
 pub const cbr = lib.custom_bit_reader;
 
-const tracy = @import("tracy");
+// const tracy = @import("tracy");
 
-var tracy_allocator = tracy.TracyAllocator.init(std.heap.smp_allocator);
+// var tracy_allocator = tracy.TracyAllocator.init(std.heap.smp_allocator);
 
 pub fn parseFrameWithBitDepth(
     reader: *cbr.AnyCustomBitReader,
@@ -35,9 +35,9 @@ pub fn parseFrameWithBitDepth(
     }
 }
 
-pub fn main() !void {
-    const allocator = tracy_allocator.allocator();
+const allocator = std.heap.smp_allocator;
 
+pub fn main() !void {
     var args = try std.process.ArgIterator.initWithAllocator(allocator);
     _ = args.next(); // skip the executable
     const path = args.next() orelse "test/test.flac";
@@ -126,25 +126,25 @@ pub fn main() !void {
     //     frame_arena.deinit();
 
     //     // write audio
-    //     //     for (0..frame.channel.channelToNumberOfSubframesMinusOne() + 1) |i| {
-    //     //         const subframe = try lib.frame.SubFrame.parseSubframe(
-    //     //             &br,
-    //     //             allocator,
-    //     //             frame,
-    //     //             null,
-    //     //             @truncate(i),
-    //     //         );
-    //     //         // std.debug.print("Subframe: {}\n", .{subframe});
-    //     //         if (i == 0) {
-    //     //             read_samples += subframe.subblock.len;
-    //     //         }
-    //     //     }
-    //     //     br.alignToByte();
+    //     for (0..frame.channel.channelToNumberOfSubframesMinusOne() + 1) |i| {
+    //         const subframe = try lib.frame.SubFrame.parseSubframe(
+    //             &br,
+    //             allocator,
+    //             frame,
+    //             null,
+    //             @truncate(i),
+    //         );
+    //         // std.debug.print("Subframe: {}\n", .{subframe});
+    //         if (i == 0) {
+    //             read_samples += subframe.subblock.len;
+    //         }
+    //     }
+    //     br.alignToByte();
 
-    //     //     // FIXME: this must be added to the library
-    //     //     _ = try file_reader.readInt(u16, .big);
-    //     //     // std.debug.print("Frame CRC16: {}\n", .{crc});
-    //     // }
+    //     // FIXME: this must be added to the library
+    //     _ = try file_reader.readInt(u16, .big);
+    //     // std.debug.print("Frame CRC16: {}\n", .{crc});
+    // }
 
     //     try bw.flush();
 }

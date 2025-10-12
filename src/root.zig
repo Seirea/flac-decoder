@@ -30,6 +30,11 @@ pub const Decoder = struct {
         }
     }
 
+    pub fn read_frame(self: *Decoder) !frame.Frame {
+        var cbr = custom_bit_reader.customBitReader(.big, custom_bit_reader.WordType, self.stream.reader().any());
+        return try frame.Frame.parseFrame(&cbr, self.allocator, self.stream_info.?);
+    }
+
     pub fn read_metadata(self: *Decoder) !?metadata.MetadataBlock {
         if (self.metadata_done) {
             return null;
@@ -49,10 +54,12 @@ pub const Decoder = struct {
         switch (block_header.metadata_block_type) {
             // streaminfo
             .streaminfo => {
-                return .{ .streaminfo = try metadata.block.getBlockFromReader(
+                const stream_info = try metadata.block.getBlockFromReader(
                     metadata.block.StreamInfo,
                     self.stream.reader().any(),
-                ) };
+                );
+                self.stream_info = stream_info;
+                return .{ .streaminfo = stream_info };
             },
             .seek_table => {
                 const seek_table = try metadata.block.SeekTable.createFromReader(
