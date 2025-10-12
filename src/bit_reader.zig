@@ -151,3 +151,19 @@ test "api coverage" {
 
     try expectError(error.EndOfStream, bit_stream_be.readBits(u1, 1));
 }
+
+test "bitreader" {
+    var mem_be: [16384]u8 = undefined;
+
+    var rand = std.Random.DefaultPrng.init(12345);
+    rand.fill(&mem_be);
+
+    const reader = std.Io.Reader.fixed(&mem_be);
+    var br = bitReader(.big, reader);
+
+    var cur: usize = 0;
+    while (br.readBits(u8, 8)) |x| {
+        try std.testing.expectEqual(mem_be[cur], x);
+        cur += 1;
+    } else |_| {}
+}
