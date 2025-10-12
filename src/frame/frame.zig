@@ -2,25 +2,27 @@ const std = @import("std");
 const rice = @import("../rice.zig");
 const util = @import("../util.zig");
 const StreamInfo = @import("../metadata/block.zig").StreamInfo;
-const tracy = @import("tracy");
 
 const bit_reader = @import("../bit_reader.zig");
 
-const crc8 = std.hash.crc.Crc(u8, .{
-    .polynomial = 0x07,
-    .initial = 0x00,
-    .reflect_input = false,
-    .reflect_output = false,
-    .xor_output = 0x0,
-});
+// const crc8 = std.hash.crc.Crc(u8, .{
+//     .polynomial = 0x07,
+//     .initial = 0x00,
+//     .reflect_input = false,
+//     .reflect_output = false,
+//     .xor_output = 0x0,
+// });
+const crc8 = std.hash.crc.Crc8Smbus;
 
-const crc16 = std.hash.crc.Crc(u16, .{
-    .polynomial = 0x8005,
-    .initial = 0,
-    .reflect_input = false,
-    .reflect_output = false,
-    .xor_output = 0x0,
-});
+// const crc16 = std.hash.crc.Crc(u16, .{
+//     .polynomial = 0x8005,
+//     .initial = 0,
+//     .reflect_input = false,
+//     .reflect_output = false,
+//     .xor_output = 0x0,
+// });
+
+const crc16 = std.hash.crc.Crc16Umts;
 
 pub const FrameParsingError = error{
     incorrect_frame_sync,
@@ -229,10 +231,10 @@ pub const Frame = struct {
     }
 };
 
-pub fn readCustomIntToEnum(comptime Enum: type, bit_reader: ReaderToCRCWriter) !Enum {
+pub fn readCustomIntToEnum(comptime Enum: type, br: ReaderToCRCWriter) !Enum {
     const int_representation = @typeInfo(Enum).@"enum".tag_type;
 
-    return @enumFromInt(try bit_reader.readBitsNoEof(int_representation, @bitSizeOf(int_representation)));
+    return @enumFromInt(try br.readBitsNoEof(int_representation, @bitSizeOf(int_representation)));
 }
 
 pub fn CrcWriter(comptime T: type) type {
@@ -314,11 +316,11 @@ pub const ReaderToCRCWriter = struct {
 
     // fn readBitsNoEof
     pub fn readBitsNoEof(self: ReaderToCRCWriter, comptime I: type, num: u16) !I {
-        const tracy_zone = tracy.ZoneN(
-            @src(),
-            std.fmt.comptimePrint("readBits->{s}", .{@typeName(I)}),
-        );
-        defer tracy_zone.End();
+        // const tracy_zone = tracy.ZoneN(
+        //     @src(),
+        //     std.fmt.comptimePrint("readBits->{s}", .{@typeName(I)}),
+        // );
+        // defer tracy_zone.End();
 
         const readed = try self.cbr.readBitsNoEof(I, num);
         try self.bw8.writeBits(readed, num);
@@ -505,7 +507,7 @@ pub const SubFrame = struct {
         const decoded_sample_type = i32;
 
         // std.debug.print("checkpoint0\n", .{});
-        const subblock_zone = tracy.ZoneN(@src(), "Parse Subblock");
+        // const subblock_zone = tracy.ZoneN(@src(), "Parse Subblock");
         subframe.subblock = switch (subframe.header) {
             .constant => blk: {
                 const buf = try alloc.alloc(decoded_sample_type, frame.block_size);
@@ -541,7 +543,7 @@ pub const SubFrame = struct {
 
                 // std.debug.print("first partition: {}\n", .{current_partition});
 
-                const partition_zone = tracy.ZoneN(@src(), "Read Rice Partitions (fixed)");
+                // const partition_zone = tracy.ZoneN(@src(), "Read Rice Partitions (fixed)");
                 try rice.readRicePartitionsIntoResidualBuffer(
                     br,
                     frame.block_size,
@@ -549,7 +551,7 @@ pub const SubFrame = struct {
                     coded_residual,
                     buf,
                 );
-                partition_zone.End();
+                // partition_zone.End();
 
                 switch (order) {
                     0 => {},
@@ -611,7 +613,7 @@ pub const SubFrame = struct {
                 // std.debug.print("coefficients: {d}\n", .{coefficients});
                 const coded_residual = try rice.CodedResidual.readCodedResidual(br);
 
-                const partition_zone = tracy.ZoneN(@src(), "Read Rice Partitions (linear)");
+                // const partition_zone = tracy.ZoneN(@src(), "Read Rice Partitions (linear)");
                 try rice.readRicePartitionsIntoResidualBuffer(
                     br,
                     frame.block_size,
@@ -619,7 +621,7 @@ pub const SubFrame = struct {
                     coded_residual,
                     buf,
                 );
-                partition_zone.End();
+                // partition_zone.End();
 
                 for (order..buf.len) |i| {
                     var predicted: i64 = 0;
