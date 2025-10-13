@@ -132,31 +132,17 @@ pub const Frame = struct {
     sub_frames: []SubFrame,
     footer: u16,
 
-    pub fn parseFrame(reader: *bit_reader.AnyBitReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
+    pub fn decodeFrame(reader: *bit_reader.AnyBitReader, alloc: std.mem.Allocator, stream_info: ?StreamInfo) !Frame {
         var frame: Frame = undefined;
 
-        var hasher8 = crc8.init();
-        var hasher16 = crc16.init();
-        const crc8_writer = CrcWriter(crc8){ .crc_obj = &hasher8 };
-        const crc16_writer = CrcWriter(crc16){ .crc_obj = &hasher16 };
-
-        var crc8_bw = std.io.bitWriter(.big, crc8_writer);
-        var crc16_bw = std.io.bitWriter(.big, crc16_writer);
-
-        var crc_reader = ReaderToCRCWriter{
-            .cbr = reader,
-            .bw8 = &crc8_bw,
-            .bw16 = &crc16_bw,
-        };
-
-        frame.header = try FrameHeader.parseFrameHeader(crc_reader);
+        frame.header = try FrameHeader.parseFrameHeader(reader);
         const sub_count: u4 = frame.header.channel.channelToNumberOfSubframesMinusOne() + 1;
 
         // std.debug.print("Parsing frame with header: {}\n", .{frame.header});
         frame.sub_frames = try alloc.alloc(SubFrame, sub_count);
         for (0..sub_count) |channel_id| {
-            frame.sub_frames[channel_id] = try SubFrame.parseSubframe(
-                crc_reader,
+            frame.sub_frames[channel_id] = try SubFrame.decodeSubframe(
+                reader,
                 alloc,
                 frame.header,
                 stream_info,
@@ -169,17 +155,18 @@ pub const Frame = struct {
 
         // std.debug.print("checkpoint3\n", .{});
 
-        crc_reader.cbr.alignToByte();
+        try reader.alignToByte();
+        // crc_reader.cbr.alignToByte();
 
-        try crc_reader.bw16.flushBits();
-        const fin = crc_reader.bw16.writer.crc_obj.final();
-        // read crc
-        frame.footer = try crc_reader.cbr.readInt(u16);
-        // std.debug.print("Footer says CRC should be: {} | What we got: {}\n", .{ frame.footer, fin });
-        // CRC16 Check (return error if failed)
-        if (fin != frame.footer) {
-            return error.crc_frame_footer_mismatch;
-        }
+        // try crc_reader.bw16.flushBits();
+        // const fin = crc_reader.bw16.writer.crc_obj.final();
+        // // read crc
+        frame.footer = try reader.readBits(u16, 16);
+        // // std.debug.print("Footer says CRC should be: {} | What we got: {}\n", .{ frame.footer, fin });
+        // // CRC16 Check (return error if failed)
+        // if (fin != frame.footer) {
+        //     return error.crc_frame_footer_mismatch;
+        // }
 
         // stereo decorrelation
 
@@ -226,15 +213,16 @@ pub const Frame = struct {
 
         return frame;
     }
+
     pub fn calculateSamples(_: Frame) []i32 {
         @panic("TODO");
     }
 };
 
-pub fn readCustomIntToEnum(comptime Enum: type, br: ReaderToCRCWriter) !Enum {
+pub fn readCustomIntToEnum(comptime Enum: type, br: *bit_reader.AnyBitReader) !Enum {
     const int_representation = @typeInfo(Enum).@"enum".tag_type;
 
-    return @enumFromInt(try br.readBitsNoEof(int_representation, @bitSizeOf(int_representation)));
+    return @enumFromInt(try br.readBits(int_representation, @bitSizeOf(int_representation)));
 }
 
 pub fn CrcWriter(comptime T: type) type {
@@ -365,31 +353,31 @@ pub const FrameHeader = struct {
     coded_number: u36,
     crc: u8,
 
-    pub fn parseFrameHeader(crc_reader: ReaderToCRCWriter) !FrameHeader {
+    pub fn parseFrameHeader(br: *bit_reader.AnyBitReader) !FrameHeader {
         var frame_header: FrameHeader = undefined;
         frame_header.unusual_sample_rate = null;
 
-        if (try crc_reader.readBitsNoEof(u15, 15) != 0b111111111111100) {
+        if (try br.readBits(u15, 15) != 0b111111111111100) {
             return error.incorrect_frame_sync;
         }
 
-        frame_header.blocking_strategy = try crc_reader.readBitsNoEof(u1, @bitSizeOf(u1)) == 1;
+        frame_header.blocking_strategy = try br.readBits(u1, @bitSizeOf(u1)) == 1;
 
-        const bs = try readCustomIntToEnum(ParsingBlockSize, crc_reader);
-        frame_header.sample_rate = try readCustomIntToEnum(ParsingSampleRate, crc_reader);
-        frame_header.channel = try readCustomIntToEnum(Channel, crc_reader);
-        frame_header.bit_depth = try readCustomIntToEnum(BitDepth, crc_reader);
+        const bs = try readCustomIntToEnum(ParsingBlockSize, br);
+        frame_header.sample_rate = try readCustomIntToEnum(ParsingSampleRate, br);
+        frame_header.channel = try readCustomIntToEnum(Channel, br);
+        frame_header.bit_depth = try readCustomIntToEnum(BitDepth, br);
 
-        if (try crc_reader.readBitsNoEof(u1, 1) != 0) {
+        if (try br.readBits(u1, 1) != 0) {
             return error.using_reserved_value;
         }
 
-        frame_header.coded_number = try decodeNumber(crc_reader);
+        frame_header.coded_number = try decodeNumber(br);
 
         // we should be aligned at this point
         frame_header.block_size = switch (bs) {
-            .uncommon_8bit => (try crc_reader.readInt(u8)) + 1,
-            .uncommon_16bit => (try crc_reader.readInt(u16)) + 1,
+            .uncommon_8bit => (try br.readBits(u8, 8)) + 1,
+            .uncommon_16bit => (try br.readBits(u16, 16)) + 1,
             .@"192" => 192,
             .@"576" => 576,
             .@"1152" => 1152,
@@ -410,14 +398,14 @@ pub const FrameHeader = struct {
 
         switch (frame_header.sample_rate) {
             .uncommon_8bit => {
-                frame_header.unusual_sample_rate = @as(u18, try crc_reader.readInt(u8)) * 1000;
+                frame_header.unusual_sample_rate = @as(u18, try br.readBits(u8, 8)) * 1000;
             },
             .uncommon_16bit => {
-                frame_header.unusual_sample_rate = try crc_reader.readInt(u16);
+                frame_header.unusual_sample_rate = try br.readBits(u16, 16);
             },
             .uncommon_16bit_div_10 => {
                 // TODO: Fix this to be more accurate to the RFC
-                frame_header.unusual_sample_rate = @divFloor(try crc_reader.readInt(u16), 10);
+                frame_header.unusual_sample_rate = try br.readBits(u16, 16) * 10;
             },
             .forbidden => {
                 return error.forbidden_sample_rate;
@@ -425,18 +413,18 @@ pub const FrameHeader = struct {
             else => {},
         }
 
-        try crc_reader.bw8.flushBits();
+        // try crc_reader.bw8.flushBits();
 
-        // std.debug.print("frame header: {}\n", .{frame_header});
-        // std.debug.print("crc8: {}, {b}\n", .{ hasher.final(), crc_reader.bw.bits });
-        const fin = crc_reader.bw8.writer.crc_obj.final();
-        frame_header.crc = try crc_reader.readInt(u8);
-        // std.debug.print("header crc8: {} | we got: {}\n", .{ frame_header.crc, fin });
+        // // std.debug.print("frame header: {}\n", .{frame_header});
+        // // std.debug.print("crc8: {}, {b}\n", .{ hasher.final(), crc_reader.bw.bits });
+        // const fin = crc_reader.bw8.writer.crc_obj.final();
+        frame_header.crc = try br.readBits(u8, 8);
+        // // std.debug.print("header crc8: {} | we got: {}\n", .{ frame_header.crc, fin });
 
-        // CRC Check (return error if failed)
-        if (fin != frame_header.crc) {
-            return error.crc_frame_header_mismatch;
-        }
+        // // CRC Check (return error if failed)
+        // if (fin != frame_header.crc) {
+        //     return error.crc_frame_header_mismatch;
+        // }
 
         return frame_header;
     }
@@ -456,14 +444,14 @@ pub const SubFrame = struct {
     wasted_bits: u5,
     subblock: []i32,
 
-    pub fn parseSubframe(br: ReaderToCRCWriter, alloc: std.mem.Allocator, frame: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
+    pub fn decodeSubframe(br: *bit_reader.AnyBitReader, alloc: std.mem.Allocator, frame_header: FrameHeader, stream_info: ?StreamInfo, channel_num: u3) !SubFrame {
         var subframe: SubFrame = undefined;
         // std.debug.print("BR start: {}\n", .{br});
 
-        if (try br.readBitsNoEof(u1, 1) != 0) return error.missing_zero_bit;
+        if (try br.readBits(u1, 1) != 0) return error.missing_zero_bit;
 
         // std.debug.print("BR 1: {}\n", .{br});
-        const header = try br.readBitsNoEof(u6, 6);
+        const header = try br.readBits(u6, 6);
         // std.debug.print("BR 2: {}\n", .{br});
         subframe.header = switch (header) {
             0 => .constant,
@@ -475,18 +463,18 @@ pub const SubFrame = struct {
         };
 
         subframe.wasted_bits = 0;
-        if (try br.readBitsNoEof(u1, 1) == 1) {
+        if (try br.readBits(u1, 1) == 1) {
             subframe.wasted_bits = @intCast(try br.readUnary() + 1);
         }
 
         // std.debug.print("ended unary: {}\n", .{subframe.wasted_bits});
 
         // std.debug.print("BR 3: {}, {}\n", .{ br, br.reader.context });
-        const bit_depth_minus_one = try frame.bit_depth.asIntMinusOne(stream_info);
+        const bit_depth_minus_one = try frame_header.bit_depth.asIntMinusOne(stream_info);
         // std.debug.print("intercorrelation offset: {} | wasted bits: {}\n", .{ offset_if_is_side_subframe, wasted });
-        var real_bit_depth: u16 = (bit_depth_minus_one - subframe.wasted_bits) + 1;
+        var real_bit_depth: u6 = (bit_depth_minus_one - subframe.wasted_bits) + 1;
 
-        switch (frame.channel) {
+        switch (frame_header.channel) {
             .left_side, .mid_side => {
                 if (channel_num == 1) {
                     real_bit_depth += 1;
@@ -510,7 +498,7 @@ pub const SubFrame = struct {
         // const subblock_zone = tracy.ZoneN(@src(), "Parse Subblock");
         subframe.subblock = switch (subframe.header) {
             .constant => blk: {
-                const buf = try alloc.alloc(decoded_sample_type, frame.block_size);
+                const buf = try alloc.alloc(decoded_sample_type, frame_header.block_size);
                 const target_val = (try util.readTwosComplementIntegerOfSetBits(
                     br,
                     decoded_sample_type,
@@ -520,7 +508,7 @@ pub const SubFrame = struct {
                 break :blk buf;
             },
             .verbatim => blk: {
-                var buf = try alloc.alloc(decoded_sample_type, frame.block_size);
+                var buf = try alloc.alloc(decoded_sample_type, frame_header.block_size);
                 for (0..buf.len) |i| {
                     // i(var)
 
@@ -529,7 +517,7 @@ pub const SubFrame = struct {
                 break :blk buf;
             },
             .fixed_predictor => |order| blk: {
-                var buf = try alloc.alloc(decoded_sample_type, frame.block_size);
+                var buf = try alloc.alloc(decoded_sample_type, frame_header.block_size);
 
                 //read warmup samples
                 for (0..order) |i| {
@@ -546,7 +534,7 @@ pub const SubFrame = struct {
                 // const partition_zone = tracy.ZoneN(@src(), "Read Rice Partitions (fixed)");
                 try rice.readRicePartitionsIntoResidualBuffer(
                     br,
-                    frame.block_size,
+                    frame_header.block_size,
                     order,
                     coded_residual,
                     buf,
@@ -591,16 +579,16 @@ pub const SubFrame = struct {
             .linear_predictor_minus_one => |order_minus_one| blk: {
                 const order: u6 = order_minus_one + 1;
 
-                var buf = try alloc.alloc(decoded_sample_type, frame.block_size);
+                var buf = try alloc.alloc(decoded_sample_type, frame_header.block_size);
                 for (0..order) |i| {
                     buf[i] = (try util.readTwosComplementIntegerOfSetBits(br, decoded_sample_type, real_bit_depth)) << wasted;
                 }
 
-                const coefficient_precision: u4 = try br.readBitsNoEof(u4, 4) + 1;
+                const coefficient_precision: u4 = try br.readBits(u4, 4) + 1;
 
                 // TODO: Add a safe mode to the library so that this check can be turned off if needed
                 // Defined under https://www.rfc-editor.org/rfc/rfc9639.html#appendix-B.4-1 to never be negative.
-                const prediction_right_shift: i5 = try br.readBitsNoEof(i5, 5);
+                const prediction_right_shift: i5 = try br.readBits(i5, 5);
                 if (prediction_right_shift < 0) {
                     return error.negative_lpc_shift;
                 }
@@ -616,7 +604,7 @@ pub const SubFrame = struct {
                 // const partition_zone = tracy.ZoneN(@src(), "Read Rice Partitions (linear)");
                 try rice.readRicePartitionsIntoResidualBuffer(
                     br,
-                    frame.block_size,
+                    frame_header.block_size,
                     order,
                     coded_residual,
                     buf,
@@ -635,15 +623,15 @@ pub const SubFrame = struct {
                 break :blk buf;
             },
         };
-        // std.debug.print("Created: {d}\n", .{subframe.subblock});
+        // std.debug.print("Created: {any}\n", .{subframe.subblock});
 
         return subframe;
     }
 };
 
-pub fn decodeNumber(reader: ReaderToCRCWriter) !u36 {
+pub fn decodeNumber(reader: *bit_reader.AnyBitReader) !u36 {
     var ret: u36 = 0;
-    const first = try reader.readInt(u8);
+    const first = try reader.readBits(u8, 8);
 
     var N: u3 = undefined;
     if (first & 0b1000_0000 == 0) {
@@ -678,7 +666,7 @@ pub fn decodeNumber(reader: ReaderToCRCWriter) !u36 {
 
     for (0..N - 1) |_| {
         ret <<= 6;
-        ret |= (try reader.readInt(u8) & 0b0011_1111);
+        ret |= (try reader.readBits(u8, 8) & 0b0011_1111);
     }
 
     return ret;

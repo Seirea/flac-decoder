@@ -1,6 +1,7 @@
 const std = @import("std");
 const frame = @import("frame/frame.zig");
 const util = @import("util.zig");
+const bit_reader = @import("bit_reader.zig");
 
 pub const ParameterSize = enum {
     @"4-bits",
@@ -16,9 +17,9 @@ pub const CodedResidual = struct {
     // the number of bits allocated to the Rice Parameter in each partition
     parameter_size: ParameterSize,
 
-    pub fn readCodedResidual(br: anytype) !CodedResidual {
+    pub fn readCodedResidual(br: *bit_reader.AnyBitReader) !CodedResidual {
         var out: CodedResidual = undefined;
-        const coding_method: u2 = try br.readBitsNoEof(u2, 2);
+        const coding_method: u2 = try br.readBits(u2, 2);
         out.parameter_size = switch (coding_method) {
             0b00 => .@"4-bits",
             0b01 => .@"5-bits",
@@ -27,7 +28,7 @@ pub const CodedResidual = struct {
             },
         };
 
-        out.order = try br.readBitsNoEof(u4, 4);
+        out.order = try br.readBits(u4, 4);
 
         return out;
     }
@@ -37,10 +38,10 @@ pub const Partition = struct {
     escaped: bool,
     parameter: u5,
 
-    pub fn readPartition(br: anytype, residual: CodedResidual) !Partition {
+    pub fn readPartition(br: *bit_reader.AnyBitReader, residual: CodedResidual) !Partition {
         const param: u5 = switch (residual.parameter_size) {
-            .@"4-bits" => try br.readBitsNoEof(u5, 4),
-            .@"5-bits" => try br.readBitsNoEof(u5, 5),
+            .@"4-bits" => try br.readBits(u5, 4),
+            .@"5-bits" => try br.readBits(u5, 5),
         };
 
         const escape = switch (residual.parameter_size) {
@@ -49,7 +50,7 @@ pub const Partition = struct {
         };
 
         const ret = Partition{
-            .parameter = if (escape) try br.readBitsNoEof(u5, 5) else param,
+            .parameter = if (escape) try br.readBits(u5, 5) else param,
             .escaped = escape,
         };
         return ret;
@@ -88,26 +89,26 @@ test "check fold residual" {
     try expecteq(unfold_residual(268), 134);
 }
 
-pub fn readRiceSignedBlock(br: frame.ReaderToCRCWriter, vals: []i32, partition_parameter: u5) !void {
+pub fn readRiceSignedBlock(br: *bit_reader.AnyBitReader, vals: []i32, partition_parameter: u5) !void {
     // const partition_zone = tracy.ZoneN(@src(), "Read Rice Signed Block/Partition");
     // defer partition_zone.End();
     if (partition_parameter == 0) {
         //
         for (0..vals.len) |i| {
-            const quotient = try br.readUnary();
+            const quotient: u32 = @intCast(try br.readUnary());
             vals[i] = unfold_residual(quotient);
         }
         return;
     }
 
     for (0..vals.len) |i| {
-        const quotient = try br.readUnary();
-        const remainder = try br.readBitsNoEof(u32, partition_parameter);
+        const quotient: u32 = @intCast(try br.readUnary());
+        const remainder = try br.readBits(u32, partition_parameter);
         vals[i] = unfold_residual((quotient << partition_parameter) | remainder);
     }
 }
 
-pub fn readRicePartitionsIntoResidualBuffer(br: frame.ReaderToCRCWriter, block_size: u16, predictor_order: u6, coded_residual: CodedResidual, residuals: []i32) !void {
+pub fn readRicePartitionsIntoResidualBuffer(br: *bit_reader.AnyBitReader, block_size: u16, predictor_order: u6, coded_residual: CodedResidual, residuals: []i32) !void {
     const num_partitions: u16 = @as(u16, 1) << coded_residual.order;
     const number_of_samples_per_partition = block_size >> coded_residual.order;
 

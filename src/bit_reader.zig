@@ -43,15 +43,19 @@ pub fn BitReader(endian: std.builtin.Endian) type {
                 const remaining_bytes = remaining / 8;
                 const leftover_bits: u3 = @intCast(remaining - remaining_bytes * 8);
 
-                try self.reader.discardAll(1 + remaining_bytes);
+                try self.reader.discardAll(@sizeOf(WordType) + remaining_bytes);
                 self.consumed_bits = leftover_bits;
             }
         }
 
         pub fn readUnary(self: *@This()) !WordType {
             std.debug.assert(0 <= self.consumed_bits and self.consumed_bits < WordSizeInBits);
-            if (self.reader.bufferedLen() < @sizeOf(WordType)) {
+            // if (self.reader.bufferedLen() < @sizeOf(WordType)) {
+            if (self.reader.fill(@sizeOf(WordType))) |_| {} else |err| {
                 @branchHint(.cold);
+                if (err == std.Io.Reader.Error.ReadFailed) {
+                    return err;
+                }
 
                 const remaining: WordType = intFromSlice(WordType, try self.reader.peek(self.reader.bufferedLen()));
                 // const remaining: WordType = @intCast(try self.reader.peekArray(self.reader.bufferedLen()));
@@ -123,7 +127,21 @@ pub fn BitReader(endian: std.builtin.Endian) type {
             self.consumed_bits = 0;
         }
 
-        // TODO: this should be inlineable/comptimable
+        /// aligns reader to next byte
+        pub fn alignToByte(self: *@This()) !void {
+            if (self.consumed_bits % 8 == 0) {
+                return;
+            }
+            self.consumed_bits = 8 * ((self.consumed_bits / 8) + 1);
+            std.debug.assert(self.consumed_bits % 8 == 0);
+            if (self.consumed_bits == WordSizeInBits) {
+                // FIXME: perhaps should use discardAll.
+                self.reader.toss(@sizeOf(WordType));
+                self.consumed_bits = 0;
+            }
+        }
+
+        // FIXME: this should be inlineable/comptimable
         pub fn readBits(self: *@This(), T: type, bits: CountType) !T {
             const ResultSize = @bitSizeOf(T);
             std.debug.assert(bits <= ResultSize and ResultSize <= WordSizeInBits);
@@ -135,8 +153,11 @@ pub fn BitReader(endian: std.builtin.Endian) type {
 
             std.debug.assert(bits > 0);
 
-            if (self.reader.bufferedLen() < @sizeOf(WordType)) {
+            if (self.reader.fill(@sizeOf(WordType))) |_| {} else |err| {
                 @branchHint(.cold);
+                if (err == std.Io.Reader.Error.ReadFailed) {
+                    return err;
+                }
                 if (self.consumed_bits + bits > self.reader.bufferedLen() * 8) {
                     return error.EndOfStream;
                 }

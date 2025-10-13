@@ -185,22 +185,26 @@ pub const CueSheet = struct {
     };
 
     pub fn createFromReader(reader: *bit_reader.AnyBitReader, alloc: std.mem.Allocator) !CueSheet {
+        try reader.alignReader();
         var ret: CueSheet = undefined;
         try reader.reader.readSliceAll(&ret.media_catalog_num);
 
-        ret.lead_in_samples = try reader.reader.takeInt(u64, .big);
+        ret.lead_in_samples = try reader.readBits(u64, 64);
 
-        ret.is_cd_da = try reader.readBits(u1, @bitSizeOf(u1)) == 1;
+        ret.is_cd_da = try reader.readBits(u1, 1) == 1;
         // u(7+258*8) Reserved. All bits MUST be set to zero.
         try reader.discardBits(7 + 258 * 8);
         // try br.alignToByte();
+        std.debug.assert(reader.consumed_bits == 0);
 
-        const track_count = try reader.reader.takeInt(u8, .big);
+        const track_count = try reader.readBits(u8, 8);
         ret.tracks = try alloc.alloc(CueTrack, track_count);
+        std.debug.print("allocated {} tracks\n", .{track_count});
 
         for (0..track_count) |i| {
-            ret.tracks[i].track_offset = try reader.reader.takeInt(u64, .big);
-            ret.tracks[i].track_num = try reader.reader.takeInt(u8, .big);
+            ret.tracks[i].track_offset = try reader.readBits(u64, 64);
+            ret.tracks[i].track_num = try reader.readBits(u8, 8);
+            try reader.alignReader();
             try reader.reader.readSliceAll(&ret.tracks[i].ISRC);
             ret.tracks[i].is_audio = try reader.readBits(u1, @bitSizeOf(u1)) == 1;
             ret.tracks[i].pre_emphasis = try reader.readBits(u1, @bitSizeOf(u1)) == 1;
@@ -209,15 +213,14 @@ pub const CueSheet = struct {
             try reader.discardBits(6 + 13 * 8);
 
             // try reader.skipBytes(6 + 13 * 8, .{});
-            const index_count = try reader.reader.takeInt(u8, .big);
+            const index_count = try reader.readBits(u8, 8);
 
             ret.tracks[i].index_points = try alloc.alloc(IndexPoint, index_count);
 
             for (0..index_count) |index_point_idx| {
-                ret.tracks[i].index_points[index_point_idx].offset = try reader.reader.takeInt(u64, .big);
-                ret.tracks[i].index_points[index_point_idx].index_point = try reader.reader.takeInt(u8, .big);
-                const discarded = try reader.reader.discardShort(3);
-                std.debug.assert(discarded == 3);
+                ret.tracks[i].index_points[index_point_idx].offset = try reader.readBits(u64, 64);
+                ret.tracks[i].index_points[index_point_idx].index_point = try reader.readBits(u8, 8);
+                try reader.discardBits(3 * 8);
             }
         }
         return ret;

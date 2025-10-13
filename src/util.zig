@@ -27,10 +27,10 @@ pub fn signExtendFromDynamicBitWidth(comptime T: type, val: T, bit_size: u16) T 
     return (val ^ uppermost) - uppermost;
 }
 
-pub fn readTwosComplementIntegerOfSetBits(br: frame.ReaderToCRCWriter, comptime T: type, bit_count: u16) !T {
+pub fn readTwosComplementIntegerOfSetBits(br: *bit_reader.AnyBitReader, comptime T: type, bit_count: u6) !T {
     return signExtendFromDynamicBitWidth(
         T,
-        try br.readBitsNoEof(T, bit_count),
+        try br.readBits(T, bit_count),
         bit_count,
     );
 }
