@@ -6,25 +6,25 @@ pub const bit_reader = @import("bit_reader.zig");
 
 pub const DecoderError = error{
     magic_bytes_mismatch,
+    unhandled_metadata_block_type,
+    forbidden,
 } || frame.FrameParsingError;
 
 pub const Decoder = struct {
     stream_info: ?metadata.block.StreamInfo = null,
-    reader: std.Io.Reader,
     bit_reader: bit_reader.AnyBitReader,
     metadata_done: bool = false,
     allocator: std.mem.Allocator,
 
-    pub fn init(reader: std.Io.Reader, alloc: std.mem.Allocator) Decoder {
+    pub fn init(reader: *std.Io.Reader, alloc: std.mem.Allocator) Decoder {
         return .{
-            .reader = reader,
             .bit_reader = bit_reader.bitReader(.big, reader),
             .allocator = alloc,
         };
     }
 
     pub fn read_magic(self: *Decoder) !void {
-        const sig: []u8 = try self.reader.take(4);
+        const sig: []u8 = try self.bit_reader.reader.take(4);
         std.debug.print("{s}\n", .{sig});
 
         if (!std.mem.eql(u8, sig, "fLaC")) {
@@ -39,10 +39,10 @@ pub const Decoder = struct {
 
         const block_header = try metadata.block.getBlockFromReader(
             metadata.block.Header,
-            self.reader,
+            &self.bit_reader,
         );
 
-        // std.debug.print("\n\nblock_header:{}", .{block_header});
+        std.debug.print("\n\nblock_header:{}", .{block_header});
 
         if (block_header.is_last_block) {
             self.metadata_done = true;
@@ -51,14 +51,15 @@ pub const Decoder = struct {
         switch (block_header.metadata_block_type) {
             // streaminfo
             .streaminfo => {
-                return .{ .streaminfo = try metadata.block.getBlockFromReader(
-                    metadata.block.StreamInfo,
-                    self.stream.reader().any(),
-                ) };
+                const streaminfo = try metadata.block.StreamInfo.createFromReader(
+                    &self.bit_reader,
+                );
+                self.stream_info = streaminfo;
+                return .{ .streaminfo = streaminfo };
             },
             .seek_table => {
                 const seek_table = try metadata.block.SeekTable.createFromReader(
-                    self.stream.reader().any(),
+                    &self.bit_reader,
                     self.allocator,
                     block_header.size_of_metadata_block,
                 );
@@ -67,7 +68,7 @@ pub const Decoder = struct {
             },
             .vorbis_comment => {
                 const vorbis_comment = try metadata.vorbis.VorbisComment.createFromReader(
-                    self.stream.reader().any(),
+                    self.bit_reader.reader,
                     self.allocator,
                 );
                 std.debug.print("Vorbis Comment Vendor String: {s}\n", .{vorbis_comment.vendor_string});
@@ -78,7 +79,7 @@ pub const Decoder = struct {
             },
             .picture => {
                 const picture = try metadata.block.Picture.createFromReader(
-                    self.stream.reader().any(),
+                    self.bit_reader.reader,
                     self.allocator,
                 );
                 std.debug.print("Image type: {s} | description: {s}\n", .{
@@ -89,20 +90,19 @@ pub const Decoder = struct {
             },
             .application => {
                 const app = try metadata.block.Application.createFromReader(
-                    self.stream.reader().any(),
+                    self.bit_reader.reader,
                     self.allocator,
                     block_header.size_of_metadata_block,
                 );
-                std.debug.print("{}", .{app});
                 return .{ .application = app };
             },
             .padding => {
-                try self.stream.reader().skipBytes(block_header.size_of_metadata_block, .{});
+                try self.bit_reader.reader.discardAll(block_header.size_of_metadata_block);
                 return .{ .padding = {} };
             },
             .cuesheet => {
                 const cue_sheet = try metadata.block.CueSheet.createFromReader(
-                    self.stream.reader().any(),
+                    &self.bit_reader,
                     self.allocator,
                 );
 
@@ -110,15 +110,19 @@ pub const Decoder = struct {
                 for (cue_sheet.tracks) |x| {
                     std.debug.print("{s} @ {d}\n", .{ x.ISRC, x.track_offset });
                 }
+
                 return .{ .cuesheet = cue_sheet };
             },
-            else => {
-                try self.stream.reader().skipBytes(block_header.size_of_metadata_block, .{});
-                std.debug.print("Unhandled Block Type: {}\n", .{
-                    block_header.metadata_block_type,
-                });
-                return null;
+            .forbidden => {
+                return DecoderError.forbidden;
             },
+            // else => {
+            //     try self.bit_reader.reader.discardAll(block_header.size_of_metadata_block);
+            //     std.debug.print("Unhandled Block Type: {}\n", .{
+            //         block_header.metadata_block_type,
+            //     });
+            //     return DecoderError.unhandled_metadata_block_type;
+            // },
         }
     }
 };

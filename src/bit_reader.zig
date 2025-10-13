@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const WordType = usize;
-pub const AnyBitReader = BitReader(.big, std.io.Reader);
+pub const AnyBitReader = BitReader(.big);
 
 // BIG ENDIAN FORMAT
 // stream: 0xab, 0xcd, 0xef =>  0xabcdef
@@ -31,8 +31,22 @@ pub fn BitReader(endian: std.builtin.Endian) type {
         const WordSizeInBits = @bitSizeOf(WordType);
         const Mask: WordType = ~@as(WordType, 0);
 
-        reader: std.Io.Reader,
+        reader: *std.Io.Reader,
         consumed_bits: CountType = 0, // 0 <= consumed_bits < WordSizeInBits should hold!
+
+        pub fn discardBits(self: *@This(), n: WordType) !void {
+            if (n < WordSizeInBits - self.consumed_bits) {
+                self.consumed_bits += @intCast(n);
+            } else {
+                const remaining = n - (WordSizeInBits - self.consumed_bits);
+
+                const remaining_bytes = remaining / 8;
+                const leftover_bits: u3 = @intCast(remaining - remaining_bytes * 8);
+
+                try self.reader.discardAll(1 + remaining_bytes);
+                self.consumed_bits = leftover_bits;
+            }
+        }
 
         pub fn readUnary(self: *@This()) !WordType {
             std.debug.assert(0 <= self.consumed_bits and self.consumed_bits < WordSizeInBits);
@@ -85,6 +99,20 @@ pub fn BitReader(endian: std.builtin.Endian) type {
                     }
                 }
             }
+        }
+
+        pub fn readBigBits(self: *@This(), T: type, bits: WordType) !T {
+            const ResultSize = @bitSizeOf(T);
+            std.debug.assert(WordSizeInBits <= bits and bits <= ResultSize);
+
+            var res: T = 0;
+            var bit_tracker = bits;
+            while (bit_tracker > 0) {
+                res <<= @bitSizeOf(WordType);
+                res |= try self.readBits(WordType, if (bits >= WordSizeInBits) WordSizeInBits else @intCast(bits));
+                bit_tracker -= @min(WordSizeInBits, bit_tracker);
+            }
+            return res;
         }
 
         // TODO: this should be inlineable/comptimable
@@ -164,7 +192,7 @@ pub fn BitReader(endian: std.builtin.Endian) type {
     };
 }
 
-pub fn bitReader(comptime endian: std.builtin.Endian, reader: std.Io.Reader) BitReader(endian) {
+pub fn bitReader(comptime endian: std.builtin.Endian, reader: *std.Io.Reader) BitReader(endian) {
     return BitReader(endian){
         .reader = reader,
     };

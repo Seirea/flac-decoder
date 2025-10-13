@@ -1,13 +1,9 @@
 const std = @import("std");
 const lib = @import("flac_decoder_lib");
-const builtin = @import("builtin");
-
-pub const cbr = lib.custom_bit_reader;
-
 // var tracy_allocator = tracy.TracyAllocator.init(std.heap.smp_allocator);
 
 pub fn parseFrameWithBitDepth(
-    reader: *cbr.AnyCustomBitReader,
+    reader: *lib.bit_reader.AnyBitReader,
     alloc: *std.heap.ArenaAllocator,
     stream_info: lib.metadata.block.StreamInfo,
     out: std.io.AnyWriter,
@@ -33,21 +29,25 @@ pub fn parseFrameWithBitDepth(
     }
 }
 
+const allocator = std.heap.smp_allocator;
 pub fn main() !void {
-    const allocator = tracy_allocator.allocator();
-
-    var args = try std.process.ArgIterator.initWithAllocator(allocator);
-    _ = args.next(); // skip the executable
-    const path = args.next() orelse "test/test.flac";
-    const file = try std.fs.cwd().openFile(path, .{});
+    // var args = try std.process.ArgIterator.initWithAllocator(allocator);
+    // _ = args.next(); // skip the executable
+    // const path = args.next() orelse "test/test.flac";
+    // std.debug.print("Opening: {s}\n", .{path});
+    var file = try std.fs.cwd().openFile("test/test.flac", .{});
     defer file.close();
 
-    var metadata_arena = std.heap.ArenaAllocator.init(allocator);
+    // var metadata_arena = std.heap.ArenaAllocator.init(allocator);
     // read metadata
 
+    var buf: [8192]u8 = undefined;
+    var lol = file.reader(&buf);
+    const reader: *std.Io.Reader = &lol.interface;
+
     var decoder = lib.Decoder.init(
-        std.io.StreamSource{ .file = file },
-        metadata_arena.allocator(),
+        reader,
+        allocator,
     );
 
     try decoder.read_magic();
