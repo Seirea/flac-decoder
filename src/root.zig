@@ -42,7 +42,7 @@ pub const Decoder = struct {
             &self.bit_reader,
         );
 
-        std.debug.print("\n\nblock_header:{}", .{block_header});
+        std.debug.print("block_header:{}\n", .{block_header});
 
         if (block_header.is_last_block) {
             self.metadata_done = true;
@@ -67,6 +67,7 @@ pub const Decoder = struct {
                 return .{ .seek_table = seek_table };
             },
             .vorbis_comment => {
+                try self.bit_reader.alignReader();
                 const vorbis_comment = try metadata.vorbis.VorbisComment.createFromReader(
                     self.bit_reader.reader,
                     self.allocator,
@@ -78,6 +79,7 @@ pub const Decoder = struct {
                 return .{ .vorbis_comment = vorbis_comment };
             },
             .picture => {
+                try self.bit_reader.alignReader();
                 const picture = try metadata.block.Picture.createFromReader(
                     self.bit_reader.reader,
                     self.allocator,
@@ -89,6 +91,7 @@ pub const Decoder = struct {
                 return .{ .picture = picture };
             },
             .application => {
+                try self.bit_reader.alignReader();
                 const app = try metadata.block.Application.createFromReader(
                     self.bit_reader.reader,
                     self.allocator,

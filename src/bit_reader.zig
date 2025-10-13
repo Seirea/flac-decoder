@@ -115,6 +115,14 @@ pub fn BitReader(endian: std.builtin.Endian) type {
             return res;
         }
 
+        /// Pre-condition: The number of consumed bits must be divisible by 8 (so no bits are destroyed in the alignment)
+        pub fn alignReader(self: *@This()) !void {
+            std.debug.assert(self.consumed_bits % 8 == 0);
+            try self.reader.discardAll(self.consumed_bits / 8);
+
+            self.consumed_bits = 0;
+        }
+
         // TODO: this should be inlineable/comptimable
         pub fn readBits(self: *@This(), T: type, bits: CountType) !T {
             const ResultSize = @bitSizeOf(T);
