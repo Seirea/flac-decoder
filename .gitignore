@@ -4,3 +4,4 @@ test/
 .vscode/
 *.wav
 .DS_Store
+perf.data*

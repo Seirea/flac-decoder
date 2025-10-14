@@ -158,10 +158,10 @@ pub const Decoder = struct {
                     self.bit_reader.reader,
                     alloc,
                 );
-                std.debug.print("Vorbis Comment Vendor String: {s}\n", .{vorbis_comment.vendor_string});
-                for (vorbis_comment.user_comments) |x| {
-                    std.debug.print("COMMENT: {s}\n", .{x});
-                }
+                // std.debug.print("Vorbis Comment Vendor String: {s}\n", .{vorbis_comment.vendor_string});
+                // for (vorbis_comment.user_comments) |x| {
+                //     std.debug.print("COMMENT: {s}\n", .{x});
+                // }
                 return .{ .vorbis_comment = vorbis_comment };
             },
             .picture => {
@@ -170,10 +170,10 @@ pub const Decoder = struct {
                     self.bit_reader.reader,
                     alloc,
                 );
-                std.debug.print("Image type: {s} | description: {s}\n", .{
-                    picture.media_type_string,
-                    picture.picture_description,
-                });
+                // std.debug.print("Image type: {s} | description: {s}\n", .{
+                //     picture.media_type_string,
+                //     picture.picture_description,
+                // });
                 return .{ .picture = picture };
             },
             .application => {
@@ -195,10 +195,10 @@ pub const Decoder = struct {
                     alloc,
                 );
 
-                std.debug.print("CUE TRACKS:\n", .{});
-                for (cue_sheet.tracks) |x| {
-                    std.debug.print("{s} @ {d}\n", .{ x.ISRC, x.track_offset });
-                }
+                // std.debug.print("CUE TRACKS:\n", .{});
+                // for (cue_sheet.tracks) |x| {
+                //     std.debug.print("{s} @ {d}\n", .{ x.ISRC, x.track_offset });
+                // }
 
                 return .{ .cuesheet = cue_sheet };
             },

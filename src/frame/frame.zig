@@ -589,9 +589,11 @@ pub const SubFrame = struct {
                 // TODO: Add a safe mode to the library so that this check can be turned off if needed
                 // Defined under https://www.rfc-editor.org/rfc/rfc9639.html#appendix-B.4-1 to never be negative.
                 const prediction_right_shift: i5 = try br.readBits(i5, 5);
-                if (prediction_right_shift < 0) {
-                    return error.negative_lpc_shift;
-                }
+                std.debug.assert(prediction_right_shift >= 0);
+                // if (prediction_right_shift < 0) {
+                //     return error.negative_lpc_shift;
+                // }
+
                 const casted: u4 = @intCast(prediction_right_shift);
 
                 var coefficients = try alloc.alloc(i16, order);
@@ -617,7 +619,7 @@ pub const SubFrame = struct {
                         predicted += @as(i64, @intCast(coefficients[x])) * buf[i - x - 1];
                     }
 
-                    buf[i] = @intCast(((predicted >> casted) + buf[i]) << wasted);
+                    buf[i] = (buf[i] + @as(i32, @intCast(predicted >> casted))) << wasted;
                 }
 
                 break :blk buf;

@@ -23,7 +23,8 @@ pub fn main() !void {
 
     var metadata_arena = std.heap.ArenaAllocator.init(allocator);
     while (try decoder.read_metadata(metadata_arena.allocator())) |x| {
-        std.debug.print("Captured {}!\n", .{x});
+        // std.debug.print("Captured {}!\n", .{x});
+        _ = x;
     }
 
     std.debug.print("Metadata read\n", .{});
