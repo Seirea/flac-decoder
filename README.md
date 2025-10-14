@@ -13,14 +13,14 @@ Implemented:
     - [x] Picture
 - [x] Audio Frames
     - [x] Frame Header
-        - [x] CRC Checked
+        - [ ] CRC Checked
     - [x] Subframe
         - [x] Constant 
         - [x] Verbatim
         - [x] Fixed Predictor
         - [x] Linear Predictor
     - [x] Frame Footer
-        - [x] CRC Checked
+        - [ ] CRC Checked
 - [x] Interchannel Decorrelation
 - [ ] MD5 Sum
 - [ ] Multithreading
