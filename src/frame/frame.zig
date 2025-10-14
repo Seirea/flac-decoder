@@ -511,8 +511,10 @@ pub const SubFrame = struct {
                 var buf = try alloc.alloc(decoded_sample_type, frame_header.block_size);
                 for (0..buf.len) |i| {
                     // i(var)
-
-                    buf[i] = (try util.readTwosComplementIntegerOfSetBits(br, decoded_sample_type, real_bit_depth)) << wasted;
+                    buf[i] = (try util.readTwosComplementIntegerOfSetBits(br, decoded_sample_type, real_bit_depth));
+                }
+                for (0..buf.len) |i| {
+                    buf[i] = buf[i] << wasted;
                 }
                 break :blk buf;
             },
@@ -546,30 +548,34 @@ pub const SubFrame = struct {
                     1 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            buf[i] = (buf[i - 1] + buf[i]) << wasted;
+                            buf[i] = buf[i - 1] + buf[i];
                         }
                     },
                     2 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            buf[i] = @intCast((2 * @as(i64, buf[i - 1]) - @as(i64, buf[i - 2]) + buf[i]) << wasted);
+                            buf[i] = 2 * buf[i - 1] - buf[i - 2] + buf[i];
                         }
                     },
                     3 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            buf[i] = @intCast((3 * @as(i64, buf[i - 1]) - 3 * @as(i64, buf[i - 2]) + @as(i64, buf[i - 3]) + buf[i]) << wasted);
+                            buf[i] = 3 * buf[i - 1] - 3 * buf[i - 2] + buf[i - 3] + buf[i];
                         }
                     },
                     4 => {
                         // read remaining samples
                         for (order..buf.len) |i| {
-                            buf[i] = @intCast((4 * @as(i64, buf[i - 1]) - 6 * @as(i64, buf[i - 2]) + 4 * @as(i64, buf[i - 3]) - @as(i64, buf[i - 4]) + buf[i]) << wasted);
+                            buf[i] = 4 * buf[i - 1] - 6 * buf[i - 2] + 4 * buf[i - 3] - buf[i - 4] + buf[i];
                         }
                     },
                     else => {
                         return error.forbidden_fixed_predictor_order;
                     },
+                }
+
+                for (order..buf.len) |i| {
+                    buf[i] = buf[i] << wasted;
                 }
                 // partition_zone.end();
                 // std.debug.print("buf: {d}\n", .{buf});
@@ -579,9 +585,11 @@ pub const SubFrame = struct {
             .linear_predictor_minus_one => |order_minus_one| blk: {
                 const order: u6 = order_minus_one + 1;
 
+                var residuals = try alloc.alloc(decoded_sample_type, frame_header.block_size);
                 var buf = try alloc.alloc(decoded_sample_type, frame_header.block_size);
                 for (0..order) |i| {
-                    buf[i] = (try util.readTwosComplementIntegerOfSetBits(br, decoded_sample_type, real_bit_depth)) << wasted;
+                    residuals[i] = (try util.readTwosComplementIntegerOfSetBits(br, decoded_sample_type, real_bit_depth)) << wasted;
+                    buf[i] = residuals[i];
                 }
 
                 const coefficient_precision: u4 = try br.readBits(u4, 4) + 1;
@@ -609,17 +617,85 @@ pub const SubFrame = struct {
                     frame_header.block_size,
                     order,
                     coded_residual,
-                    buf,
+                    residuals,
                 );
                 // partition_zone.End();
 
-                for (order..buf.len) |i| {
-                    var predicted: i64 = 0;
-                    for (0..order) |x| {
-                        predicted += @as(i64, @intCast(coefficients[x])) * buf[i - x - 1];
-                    }
+                std.debug.assert(0 < order);
+                std.debug.assert(order <= 32);
 
-                    buf[i] = (buf[i] + @as(i32, @intCast(predicted >> casted))) << wasted;
+                if (order <= 12) {
+                    if (order > 8) {
+                        if (order > 10) {
+                            if (order == 12) {
+                                perform_lpc(buf, residuals, coefficients, casted, 12, real_bit_depth, coefficient_precision);
+                            } else { // order == 11
+                                perform_lpc(buf, residuals, coefficients, casted, 11, real_bit_depth, coefficient_precision);
+                            }
+                        } else {
+                            if (order == 10) {
+                                perform_lpc(buf, residuals, coefficients, casted, 10, real_bit_depth, coefficient_precision);
+                            } else { // order == 9 //
+                                perform_lpc(buf, residuals, coefficients, casted, 9, real_bit_depth, coefficient_precision);
+                            }
+                        }
+                    } else if (order > 4) {
+                        if (order > 6) {
+                            if (order == 8) {
+                                perform_lpc(buf, residuals, coefficients, casted, 8, real_bit_depth, coefficient_precision);
+                            } else { // order == 7 //
+                                perform_lpc(buf, residuals, coefficients, casted, 7, real_bit_depth, coefficient_precision);
+                            }
+                        } else {
+                            if (order == 6) {
+                                perform_lpc(buf, residuals, coefficients, casted, 6, real_bit_depth, coefficient_precision);
+                            } else { // order == 5 //
+                                perform_lpc(buf, residuals, coefficients, casted, 5, real_bit_depth, coefficient_precision);
+                            }
+                        }
+                    } else {
+                        if (order > 2) {
+                            if (order == 4) {
+                                perform_lpc(buf, residuals, coefficients, casted, 4, real_bit_depth, coefficient_precision);
+                            } else { // order == 3 */
+                                perform_lpc(buf, residuals, coefficients, casted, 3, real_bit_depth, coefficient_precision);
+                            }
+                        } else {
+                            if (order == 2) {
+                                perform_lpc(buf, residuals, coefficients, casted, 2, real_bit_depth, coefficient_precision);
+                            } else { // order == 1 //
+                                perform_lpc(buf, residuals, coefficients, casted, 1, real_bit_depth, coefficient_precision);
+                            }
+                        }
+                    }
+                } else { // order > 12 */
+                    switch (order) {
+                        32 => perform_lpc(buf, residuals, coefficients, casted, 31, real_bit_depth, coefficient_precision),
+                        31 => perform_lpc(buf, residuals, coefficients, casted, 30, real_bit_depth, coefficient_precision),
+                        30 => perform_lpc(buf, residuals, coefficients, casted, 29, real_bit_depth, coefficient_precision),
+                        29 => perform_lpc(buf, residuals, coefficients, casted, 28, real_bit_depth, coefficient_precision),
+                        28 => perform_lpc(buf, residuals, coefficients, casted, 27, real_bit_depth, coefficient_precision),
+                        27 => perform_lpc(buf, residuals, coefficients, casted, 26, real_bit_depth, coefficient_precision),
+                        26 => perform_lpc(buf, residuals, coefficients, casted, 25, real_bit_depth, coefficient_precision),
+                        25 => perform_lpc(buf, residuals, coefficients, casted, 24, real_bit_depth, coefficient_precision),
+                        24 => perform_lpc(buf, residuals, coefficients, casted, 23, real_bit_depth, coefficient_precision),
+                        23 => perform_lpc(buf, residuals, coefficients, casted, 22, real_bit_depth, coefficient_precision),
+                        22 => perform_lpc(buf, residuals, coefficients, casted, 21, real_bit_depth, coefficient_precision),
+                        21 => perform_lpc(buf, residuals, coefficients, casted, 20, real_bit_depth, coefficient_precision),
+                        20 => perform_lpc(buf, residuals, coefficients, casted, 19, real_bit_depth, coefficient_precision),
+                        19 => perform_lpc(buf, residuals, coefficients, casted, 18, real_bit_depth, coefficient_precision),
+                        18 => perform_lpc(buf, residuals, coefficients, casted, 17, real_bit_depth, coefficient_precision),
+                        17 => perform_lpc(buf, residuals, coefficients, casted, 16, real_bit_depth, coefficient_precision),
+                        16 => perform_lpc(buf, residuals, coefficients, casted, 15, real_bit_depth, coefficient_precision),
+                        15 => perform_lpc(buf, residuals, coefficients, casted, 14, real_bit_depth, coefficient_precision),
+                        14 => perform_lpc(buf, residuals, coefficients, casted, 13, real_bit_depth, coefficient_precision),
+                        13 => perform_lpc(buf, residuals, coefficients, casted, 12, real_bit_depth, coefficient_precision),
+                        else => unreachable,
+                    }
+                }
+
+                for (order..residuals.len) |i| {
+                    buf[i] = buf[i] << wasted;
                 }
 
                 break :blk buf;
@@ -630,6 +706,43 @@ pub const SubFrame = struct {
         return subframe;
     }
 };
+
+// performs lpc taking into account the required bit sizes
+// https://www.rfc-editor.org/rfc/rfc9639.html#appendix-A.3
+inline fn perform_lpc(data: []i32, residuals: []i32, coeff: []i16, shift: u4, order: comptime_int, real_bit_depth: u6, lpc_prec: u4) void {
+    const log2: comptime_int = std.math.log2(order);
+    const real: comptime_int = comptime if (std.math.isPowerOfTwo(order)) log2 else log2 + 1;
+    if (real_bit_depth + lpc_prec + real > 32) {
+        perform_lpc_wide(data, residuals, coeff, shift, order);
+    } else {
+        perform_lpc_normal(data, residuals, coeff, shift, order);
+    }
+}
+
+fn perform_lpc_wide(data: []i32, residuals: []i32, coeff: []i16, shift: u4, order: comptime_int) void {
+    for (order..residuals.len) |i| {
+        var predicted: i64 = 0;
+
+        //FIXME: integer conversion results in non-trivial performance penalty (1.2x -> 1.3x)
+        inline for (0..order) |x| {
+            predicted += @as(i64, data[i - x - 1]) * coeff[x];
+        }
+
+        data[i] = @intCast((predicted >> shift) + residuals[i]);
+    }
+}
+
+inline fn perform_lpc_normal(data: []i32, residuals: []i32, coeff: []i16, shift: u4, order: comptime_int) void {
+    for (order..residuals.len) |i| {
+        var predicted: i32 = 0;
+
+        inline for (0..order) |x| {
+            predicted += data[i - x - 1] * coeff[x];
+        }
+
+        data[i] = residuals[i] + (predicted >> shift);
+    }
+}
 
 pub fn decodeNumber(reader: *bit_reader.AnyBitReader) !u36 {
     var ret: u36 = 0;

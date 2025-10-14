@@ -5,3 +5,5 @@ test/
 *.wav
 .DS_Store
 perf.data*
+vgcore.*
+cachegrind.*
